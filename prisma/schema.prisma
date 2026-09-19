@@ -1,0 +1,168 @@
+// AXI — AI-powered IELTS preparation platform
+// Database schema. Writing module is fully implemented; other modules
+// (Reading, Listening, Speaking) plug into the same Submission model
+// via the `module` enum later.
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters", "queryCompiler"]
+  engineType      = "client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+enum Module {
+  WRITING
+  READING
+  LISTENING
+  SPEAKING
+}
+
+enum SubmissionStatus {
+  PENDING
+  COMPLETED
+  FAILED
+}
+
+enum PaymentProvider {
+  CLICK
+  PAYME
+  MOCK
+}
+
+enum PaymentStatus {
+  CREATED
+  PENDING
+  PAID
+  FAILED
+  CANCELLED
+}
+
+model User {
+  id              String    @id @default(cuid())
+  phone           String    @unique
+  name            String
+  passwordHash    String
+  role            Role      @default(USER)
+  // Future auth fields — kept nullable so email/oauth can be added later.
+  email           String?   @unique
+  phoneVerifiedAt DateTime?
+  locale          String    @default("uz")
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  submissions Submission[]
+  payments    Payment[]
+}
+
+model SmsCode {
+  id        String    @id @default(cuid())
+  phone     String
+  code      String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([phone])
+}
+
+model Submission {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module    Module           @default(WRITING)
+  testType  String           @default("TASK_2")
+  question  String
+  essay     String
+  wordCount Int
+  status    SubmissionStatus @default(PENDING)
+  createdAt DateTime         @default(now())
+
+  score         Score?
+  feedback      Feedback?
+  errors        EssayError[]
+  aiEvaluations AiEvaluation[]
+
+  @@index([userId, createdAt])
+}
+
+model Score {
+  id                String     @id @default(cuid())
+  submissionId      String     @unique
+  submission        Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  taskResponse      Float
+  coherenceCohesion Float
+  lexicalResource   Float
+  grammar           Float
+  overall           Float
+  createdAt         DateTime   @default(now())
+}
+
+model Feedback {
+  id           String     @id @default(cuid())
+  submissionId String     @unique
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  summary      String
+  // Per-criterion explanations for the result page.
+  taskResponseNote      String @default("")
+  coherenceCohesionNote String @default("")
+  lexicalResourceNote   String @default("")
+  grammarNote           String @default("")
+  strengths    String[]
+  weaknesses   String[]
+  improvements String[]
+  createdAt    DateTime   @default(now())
+}
+
+model EssayError {
+  id           String     @id @default(cuid())
+  submissionId String
+  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  category     String
+  originalText String
+  correction   String
+  explanation  String
+  createdAt    DateTime   @default(now())
+
+  @@index([submissionId])
+}
+
+// Raw AI responses for debugging and future model comparison.
+model AiEvaluation {
+  id            String     @id @default(cuid())
+  submissionId  String
+  submission    Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  provider      String
+  model         String
+  promptVersion String
+  rawResponse   String
+  latencyMs     Int?
+  success       Boolean    @default(true)
+  createdAt     DateTime   @default(now())
+
+  @@index([submissionId])
+}
+
+// Payment architecture placeholder for Click / Payme.
+model Payment {
+  id         String          @id @default(cuid())
+  userId     String
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider   PaymentProvider
+  amount     Int
+  currency   String          @default("UZS")
+  status     PaymentStatus   @default(CREATED)
+  externalId String?
+  createdAt  DateTime        @default(now())
+  updatedAt  DateTime        @updatedAt
+
+  @@index([userId])
+}
