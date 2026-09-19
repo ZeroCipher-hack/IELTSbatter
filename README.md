@@ -54,10 +54,13 @@ src/
 ├── lib/
 │   ├── ai/                         # ← ALL AI code lives here
 │   │   ├── grading.ts              # provider factory (entry point)
-│   │   ├── gemini.ts               # GeminiGrader (implements AIGrader)
+│   │   ├── gemini.ts               # GeminiGrader: retries, backoff, timeout
 │   │   ├── mock.ts                 # MockGrader (dev/test, deterministic)
-│   │   ├── prompts.ts              # versioned prompts (WRITING_GRADING_PROMPT_V1)
+│   │   ├── prompts.ts              # V1 (frozen) + V2 (calibrated) prompts
 │   │   ├── schema.ts               # Zod contract + AIGrader interface
+│   │   ├── result.ts               # single place: overall + meta assembly
+│   │   ├── debug.ts                # dev-only diagnostics (hidden in prod)
+│   │   ├── sanitize.ts             # secret scrubbing for logs/errors
 │   │   └── json.ts                 # tolerant JSON extraction
 │   ├── db/                         # Prisma client singleton
 │   ├── auth/                       # session (JWT), password (bcrypt), sms
@@ -69,7 +72,12 @@ src/
 └── middleware.ts                   # protects /dashboard, /writing
 messages/                           # uz.json, ru.json
 prisma/                             # schema + SQL migrations
-scripts/                            # dev DB, offline migrate/generate helpers
+scripts/
+├── dev-db.mjs                      # embedded PostgreSQL for local dev
+├── apply-migrations.mjs            # offline migration runner
+├── prisma-generate.mjs             # offline-safe prisma generate
+├── calibrate-writing.ts            # grader calibration CLI
+└── calibration/essays.json         # synthetic calibration set
 tests/                              # vitest suites
 ```
 
@@ -95,6 +103,11 @@ cp .env.example .env       # then edit values
 | `AI_MODE`                   | `gemini` (real grading) or `mock` (no API calls)       |
 | `GEMINI_API_KEY`            | Google AI Studio API key (server-side only)            |
 | `GEMINI_MODEL`              | e.g. `gemini-1.5-flash` — never hardcoded              |
+| `AI_PROMPT_VERSION`         | `V2` (calibrated, default) or `V1` (original)          |
+| `GEMINI_MAX_ATTEMPTS`       | Retry budget per grading (default 3; 1 = no retry)     |
+| `GEMINI_TIMEOUT_MS`         | Timeout for one Gemini request (default 60000)         |
+| `GEMINI_RETRY_BASE_MS`      | Base delay for exponential backoff (default 800)       |
+| `AI_DEBUG`                  | `true`/`false`, empty = auto (on outside production)   |
 | `SMS_MODE`                  | `mock` (logs code to console) or `live`                |
 | `PAYMENT_MODE`              | `mock`, `click`, or `payme`                            |
 | `NEXT_PUBLIC_APP_URL`       | Public app URL                                         |
@@ -153,10 +166,13 @@ npm run dev        # terminal 2 → http://localhost:3000
 npm test
 ```
 
-Covers: grading schema validation, IELTS score rounding, input validation,
-mocked-AI grading pipeline, invalid-AI-response handling, submission creation,
-and authorization (users cannot read others' submissions). Tests never call
-the real Gemini API.
+104 tests across 12 suites: grading schema validation, IELTS score rounding
+incl. .25/.75 boundaries, input validation, retry/backoff/fail-fast behaviour
+of the Gemini grader (injected transport — no network), invalid JSON / missing
+field / invalid band / unsupported category handling, secret redaction, debug
+gating, prompt version registry, calibration fixtures, submission creation,
+prompt-version & token-usage persistence, and authorization (users cannot read
+others' submissions). Tests never call the real Gemini API.
 
 ## Production build
 
@@ -176,6 +192,78 @@ npm start
 
 ---
 
+## AI grader calibration
+
+The writing grader can be run over a synthetic calibration set and compared
+against human reference bands — this is how prompt V2 was validated and how V1
+vs V2 will be compared on the same essays.
+
+```bash
+npm run calibrate                        # whole set, active AI_PROMPT_VERSION
+npm run calibrate -- --prompt V1         # compare against the original prompt
+npm run calibrate -- --id strong --id weak
+npm run calibrate -- --locale uz --delay 2000
+npm run calibrate -- --out calibration-report.json
+```
+
+Output per essay:
+
+```text
+Task Response
+Expected: 7.5
+AI:       7.0  (-0.5)
+
+Coherence & Cohesion
+Expected: 7.5
+AI:       7.5  (match)
+...
+Overall
+Expected: 7.5
+AI:       7.0  (-0.5)
+
+meta: provider=gemini model=gemini-1.5-flash prompt=WRITING_GRADING_PROMPT_V2
+      latency=8123ms attempts=1 retries=0 validation=VALID tokens=1620/498
+```
+
+plus a summary table with the mean absolute difference and exact-match count.
+The utility reuses the production prompt builders, Zod schema and scoring code,
+so what you measure is exactly what users get. It never touches the database.
+
+The fixture set (`scripts/calibration/essays.json`) is synthetic and covers:
+weak, average, strong, grammar-heavy, vocabulary-heavy, poor-task-response and
+under-length essays. No real user data is used anywhere in it.
+
+If `AI_MODE` is not `gemini` (or the API key is missing) the utility says so and
+falls back to the deterministic MockGrader, so the pipeline can be checked
+without an API key.
+
+---
+
+## Reliability, cost control and debugging
+
+- **Bounded retries.** One HTTP call per attempt with a hard timeout
+  (`GEMINI_TIMEOUT_MS`); retries use exponential backoff with jitter and stop at
+  `GEMINI_MAX_ATTEMPTS`. There is no infinite retry.
+- **Smart retry policy.** 429 / 5xx / timeouts / network errors and unusable
+  model output (bad JSON, schema mismatch) are retried; configuration errors
+  (400/401/403/404 — bad key or unknown model) fail immediately.
+- **Never crashes.** If grading still fails, the submission becomes `FAILED`,
+  the user gets a translatable `grading_failed` error, and the failure is stored
+  in `AiEvaluation` (raw response, attempts, validation status) for debugging.
+- **Raw responses are persisted** with `provider`, `model` and `promptVersion`,
+  so V1 and V2 results can be compared later.
+- **Cost control.** `inputTokens` / `outputTokens` / `latencyMs` are stored when
+  the provider reports them and stay `NULL` otherwise.
+- **Secrets never leak.** Provider errors are scrubbed of key material before
+  logging or storage; the key itself is only read inside
+  `src/lib/ai/gemini.ts` (server-side).
+- **Dev diagnostics.** Outside production, grading logs one line with model,
+  prompt version, processing time, attempts, validation status and token usage,
+  and `POST /api/writing/submit` also returns a `debug` object. In production the
+  field is absent and nothing is logged.
+
+---
+
 ## Architecture decisions
 
 - **AI provider isolation.** Everything AI lives in `src/lib/ai/`. The app
@@ -188,8 +276,14 @@ npm start
 - **Strict JSON contract.** AI output is validated with Zod
   (`lib/ai/schema.ts`); malformed responses are retried, and persistent
   failure marks the submission `FAILED` instead of crashing.
+- **Prompts are versioned, never edited in place.** `WRITING_GRADING_PROMPT_V1`
+  is frozen; V2 (criterion checklists, anti-sycophancy/anti-inflation rules,
+  independent per-criterion scoring first, de-duplicated errors) is the default.
+  `AI_PROMPT_VERSION` selects the active one and every `AiEvaluation` row records
+  which prompt produced it.
 - **Raw AI responses are stored** in `AiEvaluation` (provider, model, prompt
-  version, latency) for debugging and future model comparison.
+  version, latency, attempts, retries, validation status, token usage) for
+  debugging, cost tracking and future model comparison.
 - **Future modules** (Reading/Listening/Speaking) hook into `Submission.module`.
 - **Admin** is prepared via `User.role` (`USER`/`ADMIN`); a panel can be added
   without schema changes.

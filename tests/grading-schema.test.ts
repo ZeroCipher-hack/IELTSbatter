@@ -70,3 +70,48 @@ describe("writingGradingResponseSchema", () => {
     expect(writingGradingResponseSchema.safeParse(broken).success).toBe(false);
   });
 });
+
+describe("error deduplication fields (V2)", () => {
+  it("accepts frequency and isSystematic", () => {
+    const parsed = writingGradingResponseSchema.safeParse({
+      ...validResponse,
+      errors: [{ ...validResponse.errors[0], frequency: 4, isSystematic: true }],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it("accepts a response without them (V1 compatibility)", () => {
+    expect(writingGradingResponseSchema.safeParse(validResponse).success).toBe(true);
+  });
+
+  it("rejects a frequency below 1", () => {
+    const broken = {
+      ...validResponse,
+      errors: [{ ...validResponse.errors[0], frequency: 0 }],
+    };
+    expect(writingGradingResponseSchema.safeParse(broken).success).toBe(false);
+  });
+
+  it("allows an empty error list (no invented errors)", () => {
+    expect(writingGradingResponseSchema.safeParse({ ...validResponse, errors: [] }).success).toBe(true);
+  });
+
+  it("rejects more than 15 errors (user must not be flooded)", () => {
+    const broken = {
+      ...validResponse,
+      errors: Array.from({ length: 16 }, (_, i) => ({
+        ...validResponse.errors[0],
+        originalText: `fragment ${i}`,
+      })),
+    };
+    expect(writingGradingResponseSchema.safeParse(broken).success).toBe(false);
+  });
+});
+
+describe("informational overall field", () => {
+  it("is accepted but optional and must be a valid band when present", () => {
+    expect(writingGradingResponseSchema.safeParse({ ...validResponse, overall: 7 }).success).toBe(true);
+    expect(writingGradingResponseSchema.safeParse(validResponse).success).toBe(true);
+    expect(writingGradingResponseSchema.safeParse({ ...validResponse, overall: 6.3 }).success).toBe(false);
+  });
+});

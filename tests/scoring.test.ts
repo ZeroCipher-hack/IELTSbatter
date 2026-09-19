@@ -57,3 +57,42 @@ describe("countWords", () => {
     expect(countWords("")).toBe(0);
   });
 });
+
+describe("computeOverall — boundary and clamp behaviour", () => {
+  it("rounds the exact .25 / .75 midpoints up (never down)", () => {
+    // mean 5.75 -> 6.0
+    expect(
+      computeOverall({ taskResponse: 5.5, coherenceCohesion: 5.5, lexicalResource: 6, grammar: 6 })
+    ).toBe(6.0);
+    // mean 7.25 -> 7.5
+    expect(
+      computeOverall({ taskResponse: 7.5, coherenceCohesion: 7, lexicalResource: 7, grammar: 7.5 })
+    ).toBe(7.5);
+  });
+
+  it("never returns a value outside 0-9 in 0.5 steps", () => {
+    for (const a of [0, 3.5, 6.5, 9]) {
+      for (const b of [0, 4.5, 7, 9]) {
+        const overall = computeOverall({
+          taskResponse: a,
+          coherenceCohesion: b,
+          lexicalResource: 5.5,
+          grammar: 6.5,
+        });
+        expect(overall).toBeGreaterThanOrEqual(0);
+        expect(overall).toBeLessThanOrEqual(9);
+        expect(Number.isInteger(overall * 2)).toBe(true);
+      }
+    }
+  });
+
+  it("clamps out-of-range criterion values instead of trusting them", () => {
+    // A hallucinated 9.5 criterion must not push the overall above 9.
+    expect(
+      computeOverall({ taskResponse: 9.5, coherenceCohesion: 9.5, lexicalResource: 9.5, grammar: 9.5 })
+    ).toBe(9);
+    expect(
+      computeOverall({ taskResponse: -2, coherenceCohesion: -2, lexicalResource: 0, grammar: 0 })
+    ).toBe(0);
+  });
+});

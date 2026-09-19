@@ -1,11 +1,12 @@
-import { WRITING_GRADING_PROMPT_VERSION } from "./prompts";
+import { DEFAULT_WRITING_PROMPT_VERSION, type WritingPromptVersion } from "./prompts";
 import {
   writingGradingResponseSchema,
   type AIGrader,
   type WritingGradingInput,
   type WritingGradingResult,
 } from "./schema";
-import { computeOverall, countWords } from "@/lib/utils/scoring";
+import { finalizeGradingResult } from "./result";
+import { countWords } from "@/lib/utils/scoring";
 
 /**
  * Deterministic mock grader.
@@ -17,6 +18,11 @@ import { computeOverall, countWords } from "@/lib/utils/scoring";
 export class MockGrader implements AIGrader {
   readonly provider = "mock";
   readonly model = "mock-grader-1";
+  readonly promptVersion: WritingPromptVersion;
+
+  constructor(promptVersion: WritingPromptVersion = DEFAULT_WRITING_PROMPT_VERSION) {
+    this.promptVersion = promptVersion;
+  }
 
   async gradeWriting(input: WritingGradingInput): Promise<WritingGradingResult> {
     const words = countWords(input.essay);
@@ -82,22 +88,29 @@ export class MockGrader implements AIGrader {
               explanation: uz
                 ? "Mock rejim: bu haqiqiy xato emas, tizim namoyishi uchun ko'rsatilgan."
                 : "Мок-режим: это не реальная ошибка, показано для демонстрации системы.",
+              frequency: 1,
+              isSystematic: false,
             },
           ]
         : [],
     });
 
-    return {
+    return finalizeGradingResult({
       data,
-      overall: computeOverall(scores),
       meta: {
         provider: this.provider,
         model: this.model,
-        promptVersion: WRITING_GRADING_PROMPT_VERSION,
+        promptVersion: this.promptVersion,
         rawResponse: JSON.stringify(data),
         latencyMs: 0,
+        attempts: 1,
+        retryCount: 0,
+        validationStatus: "VALID",
+        validationErrors: [],
+        inputTokens: null,
+        outputTokens: null,
       },
-    };
+    });
   }
 }
 

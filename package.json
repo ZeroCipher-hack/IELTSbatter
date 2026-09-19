@@ -13,7 +13,8 @@
     "db:migrate:offline": "node scripts/apply-migrations.mjs",
     "db:generate": "prisma generate",
     "db:generate:offline": "node scripts/prisma-generate.mjs",
-    "postinstall": "node scripts/prisma-generate.mjs || true"
+    "postinstall": "node scripts/prisma-generate.mjs || true",
+    "calibrate": "tsx scripts/calibrate-writing.ts"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",
@@ -43,6 +44,7 @@
     "postcss": "^8",
     "prisma": "^6.19.3",
     "tailwindcss": "^3.4.1",
+    "tsx": "^4.23.13",
     "typescript": "^5",
     "vitest": "^2.1.9"
   }

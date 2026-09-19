@@ -1,21 +1,35 @@
 import { prisma } from "@/lib/db";
-import { getGrader } from "@/lib/ai/grading";
+import { AIGradingError, getGrader } from "@/lib/ai/grading";
+import { debugInfoForResponse, logAiDebug, type AIDebugInfo } from "@/lib/ai/debug";
+import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { countWords } from "@/lib/utils/scoring";
 import type { WritingSubmissionInput } from "@/lib/validations/writing";
 
 /**
  * Full writing grading pipeline:
  *  create submission -> call AI -> validate -> persist score/feedback/errors
- *  -> store raw AI response -> mark completed.
+ *  -> store raw AI response + evaluation metadata -> mark completed.
  *
  * If AI grading fails the submission is marked FAILED (never crashes the app)
- * and the failure is recorded in AiEvaluation for debugging.
+ * and the failure is recorded in AiEvaluation for debugging, including the
+ * prompt version/attempts/validation status that produced it.
+ *
+ * The overall band always comes from the AI layer's server-side computation
+ * (lib/ai/result.ts -> lib/utils/scoring.ts), never from the model's own
+ * "overall" field.
  */
+export interface GradingOutcome {
+  submissionId: string;
+  status: "COMPLETED" | "FAILED";
+  /** Development-only diagnostics; undefined in production (see lib/ai/debug.ts). */
+  debug?: AIDebugInfo;
+}
+
 export async function submitAndGradeEssay(params: {
   userId: string;
   input: WritingSubmissionInput;
   feedbackLocale: string;
-}): Promise<{ submissionId: string; status: "COMPLETED" | "FAILED" }> {
+}): Promise<GradingOutcome> {
   const { userId, input, feedbackLocale } = params;
   const wordCount = countWords(input.essay);
 
@@ -42,6 +56,7 @@ export async function submitAndGradeEssay(params: {
     });
 
     const { data, overall, meta } = result;
+    logAiDebug(meta);
 
     await prisma.$transaction([
       prisma.score.create({
@@ -76,6 +91,8 @@ export async function submitAndGradeEssay(params: {
                 originalText: e.originalText,
                 correction: e.correction,
                 explanation: e.explanation,
+                frequency: e.frequency ?? 1,
+                isSystematic: e.isSystematic ?? false,
               })),
             }),
           ]
@@ -89,6 +106,11 @@ export async function submitAndGradeEssay(params: {
           rawResponse: meta.rawResponse,
           latencyMs: meta.latencyMs,
           success: true,
+          attempts: meta.attempts,
+          retryCount: meta.retryCount,
+          validationStatus: meta.validationStatus,
+          inputTokens: meta.inputTokens,
+          outputTokens: meta.outputTokens,
         },
       }),
       prisma.submission.update({
@@ -97,22 +119,37 @@ export async function submitAndGradeEssay(params: {
       }),
     ]);
 
-    return { submissionId: submission.id, status: "COMPLETED" };
+    return {
+      submissionId: submission.id,
+      status: "COMPLETED",
+      debug: debugInfoForResponse(meta),
+    };
   } catch (error) {
+    // Keep the full diagnostics when the grader reported them; otherwise
+    // fall back to what the provider object knows (never a secret).
+    const gradingError = error instanceof AIGradingError ? error.details : undefined;
+
     console.error(
       "[writing] grading failed for submission",
       submission.id,
-      error instanceof Error ? error.message : error
+      sanitizeAiText(error instanceof Error ? error.message : String(error))
     );
+
     await prisma.$transaction([
       prisma.aiEvaluation.create({
         data: {
           submissionId: submission.id,
-          provider: grader.provider,
-          model: grader.model,
-          promptVersion: "unknown",
-          rawResponse: error instanceof Error ? `ERROR: ${error.message}` : "ERROR: unknown",
+          provider: gradingError?.provider ?? grader.provider,
+          model: gradingError?.model ?? grader.model,
+          promptVersion: gradingError?.promptVersion ?? grader.promptVersion ?? "unknown",
+          rawResponse: gradingError?.rawResponse
+            ? gradingError.rawResponse
+            : `ERROR: ${sanitizeAiText(error instanceof Error ? error.message : String(error))}`,
+          latencyMs: gradingError?.latencyMs ?? null,
           success: false,
+          attempts: gradingError?.attempts ?? null,
+          retryCount: gradingError?.retryCount ?? null,
+          validationStatus: gradingError?.validationStatus ?? "PROVIDER_ERROR",
         },
       }),
       prisma.submission.update({
@@ -120,7 +157,25 @@ export async function submitAndGradeEssay(params: {
         data: { status: "FAILED" },
       }),
     ]);
-    return { submissionId: submission.id, status: "FAILED" };
+    return {
+      submissionId: submission.id,
+      status: "FAILED",
+      debug: gradingError
+        ? debugInfoForResponse({
+            provider: gradingError.provider,
+            model: gradingError.model,
+            promptVersion: gradingError.promptVersion,
+            rawResponse: "",
+            latencyMs: gradingError.latencyMs,
+            attempts: gradingError.attempts,
+            retryCount: gradingError.retryCount,
+            validationStatus: gradingError.validationStatus,
+            validationErrors: gradingError.validationErrors,
+            inputTokens: null,
+            outputTokens: null,
+          })
+        : undefined,
+    };
   }
 }
 
@@ -170,4 +225,15 @@ export async function getProgressStats(userId: string) {
       overall: s.score!.overall,
     })),
   };
+}
+
+/**
+ * AI evaluation history for a submission (owner only) — used by debugging
+ * tooling and future "compare V1 vs V2" views.
+ */
+export async function getSubmissionAiEvaluations(userId: string, submissionId: string) {
+  return prisma.aiEvaluation.findMany({
+    where: { submissionId, submission: { userId } },
+    orderBy: { createdAt: "desc" },
+  });
 }

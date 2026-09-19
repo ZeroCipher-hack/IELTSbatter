@@ -25,8 +25,17 @@ export function setGraderForTesting(grader: AIGrader | undefined): void {
 }
 
 export { AIGradingError } from "./gemini";
+export type { AIGradingErrorDetails, GeminiTransport, GeminiCallResult } from "./gemini";
+export {
+  buildAiDebugInfo,
+  debugInfoForResponse,
+  logAiDebug,
+  type AIDebugInfo,
+} from "./debug";
 export type {
   AIGrader,
+  GradingMeta,
+  ValidationStatus,
   WritingGradingInput,
   WritingGradingResult,
   WritingGradingResponse,

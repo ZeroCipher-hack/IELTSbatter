@@ -40,7 +40,11 @@ export async function POST(request: Request) {
       return apiError(502, "grading_failed", "Something went wrong. Please try again.");
     }
 
-    return NextResponse.json({ submissionId: result.submissionId });
+    // `debug` is only present outside production (see lib/ai/debug.ts).
+    return NextResponse.json({
+      submissionId: result.submissionId,
+      ...(result.debug ? { debug: result.debug } : {}),
+    });
   } catch (error) {
     return handleApiError(error);
   }

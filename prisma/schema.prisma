@@ -130,6 +130,9 @@ model EssayError {
   originalText String
   correction   String
   explanation  String
+  // Repeated errors are stored once as a representative example.
+  frequency    Int?       @default(1)
+  isSystematic Boolean    @default(false)
   createdAt    DateTime   @default(now())
 
   @@index([submissionId])
@@ -146,6 +149,12 @@ model AiEvaluation {
   rawResponse   String
   latencyMs     Int?
   success       Boolean    @default(true)
+  // Reliability / cost metadata.
+  attempts         Int?     @default(1)
+  retryCount       Int?     @default(0)
+  validationStatus String?  @default("VALID")
+  inputTokens      Int?
+  outputTokens     Int?
   createdAt     DateTime   @default(now())
 
   @@index([submissionId])

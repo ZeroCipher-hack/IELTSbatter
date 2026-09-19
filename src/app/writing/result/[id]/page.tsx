@@ -108,6 +108,16 @@ export default async function ResultPage({ params }: { params: { id: string } })
                       ? t(`categories.${e.category}`)
                       : e.category}
                   </span>
+                  {(e.frequency ?? 1) > 1 ? (
+                    <span className="ml-2 inline-block rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                      {t("repeatedCount", { count: e.frequency ?? 1 })}
+                    </span>
+                  ) : null}
+                  {e.isSystematic ? (
+                    <span className="ml-2 inline-block rounded-full bg-orange-50 px-2.5 py-0.5 text-xs font-medium text-orange-700">
+                      {t("systematic")}
+                    </span>
+                  ) : null}
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div>
                       <p className="text-xs font-medium uppercase tracking-wide text-red-500">

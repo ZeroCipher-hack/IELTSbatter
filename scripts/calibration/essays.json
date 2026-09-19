@@ -1,0 +1,83 @@
+{
+  "_comment": "Synthetic calibration set for the AXI Writing grader. No real user data. `expected` are reference bands produced by an experienced human examiner; they are optional and used only for the comparison table in scripts/calibrate-writing.ts.",
+  "question": "Some people think that governments should spend more money on public transport than on roads. Others believe that building more roads is the best way to reduce traffic congestion. Discuss both views and give your own opinion.",
+  "essays": [
+    {
+      "id": "weak",
+      "label": "Weak band 4-5 (thin, repetitive, error-heavy)",
+      "expected": {
+        "taskResponse": 4.0,
+        "coherenceCohesion": 4.5,
+        "lexicalResource": 4.5,
+        "grammar": 4.0
+      },
+      "essay": "Nowadays traffic is big problem in many city. Some people think government must spend money for public transport, other people think build more roads is best. I agree with first opinion\n\nFirst, public transport is very good. It is cheap. Many people can use bus and metro. This is good for environment. Also traffic will be less because many people dont use car. Government should spend money for this. Public transport is very good for our country.\n\nSecond, roads is also important. If we build more road, car can move fast and no traffic jam. But this is not good because more road mean more car and more pollution. So I think roads is not best solution.\n\nIn conclusion, I think government should spend money for public transport because it is good. Roads is not good solution for traffic problem."
+    },
+    {
+      "id": "average",
+      "label": "Average band 6-6.5 (addresses task, underdeveloped, some errors)",
+      "expected": {
+        "taskResponse": 6.0,
+        "coherenceCohesion": 6.0,
+        "lexicalResource": 6.0,
+        "grammar": 6.0
+      },
+      "essay": "Traffic congestion has become a serious issue in most large cities, and there are different opinions about how governments should deal with it. While some people believe that investment in public transport is the answer, others argue that building new roads is more effective. In my opinion, public transport deserves the larger share of public money.\n\nOn the one hand, supporters of public transport say that buses and metro systems can carry many passengers at the same time. If a large number of commuters use these services, the number of private cars on the road will fall, which reduces congestion directly. Moreover, public transport is better for the environment because it produces less pollution per passenger. In many European cities, this approach has been successful.\n\nOn the other hand, building new roads is seen as a quick solution. Wider roads allow cars to move faster and reduce jams in the short term. However, this advantage is usually temporary, because new roads attract more drivers. This is called induced demand, and it means the problem comes back after a few years.\n\nTo sum up, although new roads may bring short-term relief, I believe that governments should invest mainly in public transport, together with better cycling facilities and stricter rules for private cars in city centres."
+    },
+    {
+      "id": "strong",
+      "label": "Strong band 7.5-8 (fully developed, accurate, wide range)",
+      "expected": {
+        "taskResponse": 7.5,
+        "coherenceCohesion": 7.5,
+        "lexicalResource": 7.5,
+        "grammar": 8.0
+      },
+      "essay": "Few urban policy questions divide planners as sharply as the allocation of transport budgets: should the state prioritise mass transit, or is road-building the more pragmatic response to congestion? While both positions have merit, I believe that sustained investment in public transport, coupled with demand-management measures, offers the only durable solution.\n\nThe case for public transport rests on a simple arithmetic fact: a single tram or metro carriage displaces dozens of private vehicles, so capacity grows without proportionally increasing road space. Cities such as Vienna and Zurich have demonstrated that reliable, affordable networks combined with park-and-ride schemes can shift modal share decisively away from the car. Beyond congestion, the environmental dividend is substantial, since per-passenger emissions fall sharply when journeys are shared rather than undertaken individually.\n\nAdvocates of road construction, by contrast, point to the immediate relief that extra capacity provides. Their argument is not without force: bottlenecks can be eased within months, whereas rail projects take years to deliver. Yet the evidence from metropolitan areas that have widened arterial roads is discouraging. Additional lanes generate what transport economists term induced demand, as shorter journey times make driving more attractive and previously suppressed trips materialise. Congestion therefore returns, often within a decade, while the capital expenditure is irreversible.\n\nA more balanced strategy, in my view, is to treat road-building as a targeted instrument rather than a default policy. Strategic links that serve freight or connect peripheral districts may justify construction, but the core of the budget should finance frequent, integrated public transport, supported by congestion charging and workplace parking levies that price the true social cost of driving.\n\nIn conclusion, although new roads can deliver short-term relief, they tend to undermine their own benefits. Governments that wish to reduce congestion permanently should concentrate their spending on public transport and complementary policies that discourage unnecessary car use."
+    },
+    {
+      "id": "grammar-heavy",
+      "label": "Grammar-heavy errors (ideas fine, control poor -> GRA capped)",
+      "expected": {
+        "taskResponse": 6.0,
+        "coherenceCohesion": 6.0,
+        "lexicalResource": 6.0,
+        "grammar": 5.0
+      },
+      "essay": "In nowdays, the traffic it is a big problem in the most of cities. Some people they think that the goverment should to spend more money in public transport, while other peoples believe that building more roads it is the best solution. I will discuss both view and give my opinion.\n\nFirstly, public transport it is more better for the envirment because the buses and the metros they carry many people in the same time, so the number of cars are reduce. Moreover, if the government invests in the transport public, the citizens they will have more choice for travel and they will not need to buy a car. In my country, for example, the metro it is used by milions of peoples every day.\n\nHowever, the other people they argue that more roads means less traffic jam, because the cars they can move more fastly. But I think this arguments is not completely correct, because when you build a new road, more drivers they will use it and after a few years the problem it is coming back again.\n\nTo conclusion, I belive that the government should to invest more in the public transport, because it is better for the all citizens and for the enviroment too."
+    },
+    {
+      "id": "vocabulary-heavy",
+      "label": "Vocabulary-heavy errors (wrong collocation/word choice -> LR capped)",
+      "expected": {
+        "taskResponse": 6.5,
+        "coherenceCohesion": 6.5,
+        "lexicalResource": 5.5,
+        "grammar": 6.5
+      },
+      "essay": "Traffic congestion is a very big problematic in modern metropolis, and the governments have different opinions how to solve this phenomena. Some people think the public transport is the best way, other people think the construction of new roads is more efficient. I will discuss both arguments and give my personal point of view.\n\nOn the one hand, the public transport has many advantages. It is very economic, it has a lot of capacity, and it does not make so much contamination like the private cars. If the government makes a strong inversion in the metro and the buses, many people will refuse their cars, and the traffic will be more fluide. This is a very significative improvement for the quality of the air in the cities.\n\nOn the other hand, the defenders of new roads say that the infrastructure is the principal key of the mobility. When you build a new highway, the cars can circulate with more velocity and there is not so much congestion. However, the experience demonstrates that this solution is very temporally, because the new roads attract more traffic, and the problem returns as before.\n\nIn conclusion, I think the public transport is the most correct decision, because it resolves the problem in a sustainable manner, although the roads can be util in some specific cases."
+    },
+    {
+      "id": "poor-task-response",
+      "label": "Poor Task Response (off-topic / question not answered)",
+      "expected": {
+        "taskResponse": 3.5,
+        "coherenceCohesion": 6.0,
+        "lexicalResource": 6.5,
+        "grammar": 6.5
+      },
+      "essay": "In recent years, technology has changed the way people live and work all over the world. The internet gives us access to information within seconds, and smartphones allow us to communicate from any location. This has affected education, business and personal relationships in many important ways.\n\nOne of the biggest changes is remote work. Employees can now complete their tasks from home, which saves commuting time and gives companies access to a wider pool of talent. Studies suggest that productivity has remained stable or even improved in many sectors. In addition, online learning platforms have made high-quality courses available to students who could not previously afford them.\n\nHowever, there are also disadvantages. People who work from home may feel isolated, and the boundary between professional and personal life becomes unclear. Furthermore, the digital divide means that those without reliable internet access fall further behind. Governments therefore need to invest in infrastructure and digital skills training.\n\nIn conclusion, technology has brought both opportunities and challenges. If societies manage these changes carefully, the benefits will outweigh the drawbacks, and more people will be able to enjoy a better quality of life."
+    },
+    {
+      "id": "underlength",
+      "label": "Under-length (< 250 words, task only partially covered)",
+      "expected": {
+        "taskResponse": 4.5,
+        "coherenceCohesion": 5.5,
+        "lexicalResource": 6.0,
+        "grammar": 6.0
+      },
+      "essay": "Some people believe that governments should invest more in public transport instead of building new roads, while others think that new roads are the best way to reduce traffic. In my opinion, public transport should receive more investment.\n\nOn the one hand, public transport can carry a large number of passengers in a single vehicle. This reduces the number of private cars, and therefore congestion and pollution decrease. For example, a modern metro line can move thousands of commuters every hour.\n\nOn the other hand, supporters of road building argue that extra capacity allows traffic to flow more freely. This may be true in the short term, but new roads often attract additional drivers, so the congestion returns after a few years.\n\nIn conclusion, I believe that spending on public transport is the better long-term policy for reducing traffic in cities."
+    }
+  ]
+}

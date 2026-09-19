@@ -135,7 +135,9 @@
       "punctuation": "Punktuatsiya",
       "style": "Uslub",
       "coherence": "Bog'lanish"
-    }
+    },
+    "repeatedCount": "{count} marta takrorlangan",
+    "systematic": "Tizimli xato"
   },
   "dashboard": {
     "title": "Mening progressim",

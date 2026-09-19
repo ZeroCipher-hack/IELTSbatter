@@ -135,7 +135,9 @@
       "punctuation": "Пунктуация",
       "style": "Стиль",
       "coherence": "Связность"
-    }
+    },
+    "repeatedCount": "Повторяется {count} раз",
+    "systematic": "Систематическая ошибка"
   },
   "dashboard": {
     "title": "Мой прогресс",
