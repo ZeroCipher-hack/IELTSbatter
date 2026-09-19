@@ -1,13 +1,15 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { env } from "@/lib/env";
+
 import {
   promptVersionFromLabel,
   buildWritingGradingPromptForVersion,
   type WritingPromptVersion,
 } from "./prompts";
 import { extractJson } from "./json";
-import { finalizeGradingResult } from "./result";
+import { criterionScoresOf, finalizeGradingResult } from "./result";
 import { sanitizeAiText } from "./sanitize";
+import { computeProviderWarnings } from "./warnings";
 import {
   writingGradingResponseSchema,
   type AIGrader,
@@ -99,6 +101,7 @@ export class GeminiGrader implements AIGrader {
     const startedAt = Date.now();
     let attempts = 0;
     let lastRaw = "";
+    let rawTruncated = false;
     let lastValidationErrors: string[] = [];
     let lastStatus: ValidationStatus = "PROVIDER_ERROR";
     let lastReason = "unknown error";
@@ -109,11 +112,14 @@ export class GeminiGrader implements AIGrader {
       attempts++;
       try {
         const call = await this.transport.generate(prompt);
-        lastRaw = truncate(call.text ?? "", MAX_RAW_CHARS);
+        const fullText = call.text ?? "";
+        rawTruncated = fullText.length > MAX_RAW_CHARS;
+        lastRaw = truncate(fullText, MAX_RAW_CHARS);
         if (call.inputTokens != null) inputTokens = call.inputTokens;
         if (call.outputTokens != null) outputTokens = call.outputTokens;
 
         const data = parseAndValidate(lastRaw);
+
         return finalizeGradingResult({
           data,
           meta: {
@@ -128,6 +134,9 @@ export class GeminiGrader implements AIGrader {
             validationErrors: [],
             inputTokens,
             outputTokens,
+            // Provider-level observations; essay-level warnings are added by
+            // the writing pipeline so they apply to every provider equally.
+            warnings: computeProviderWarnings({ rawTruncated, outputTokens }),
           },
         });
       } catch (error) {

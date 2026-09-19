@@ -1,7 +1,10 @@
 import { prisma } from "@/lib/db";
+import type { AIGrader } from "@/lib/ai/schema";
 import { AIGradingError, getGrader } from "@/lib/ai/grading";
 import { debugInfoForResponse, logAiDebug, type AIDebugInfo } from "@/lib/ai/debug";
 import { sanitizeAiText } from "@/lib/ai/sanitize";
+import { computeEvaluationWarnings, mergeWarnings, type GradingWarning } from "@/lib/ai/warnings";
+import { env } from "@/lib/env";
 import { countWords } from "@/lib/utils/scoring";
 import type { WritingSubmissionInput } from "@/lib/validations/writing";
 
@@ -45,9 +48,13 @@ export async function submitAndGradeEssay(params: {
     },
   });
 
-  const grader = getGrader();
+  // NOTE: the grader is resolved inside the try on purpose — a misconfigured
+  // provider (e.g. AI_MODE=gemini without GEMINI_API_KEY) must fail like any
+  // other grading error and mark the submission FAILED, never leave it PENDING.
+  let grader: AIGrader | undefined;
 
   try {
+    grader = getGrader();
     const result = await grader.gradeWriting({
       question: input.question,
       essay: input.essay,
@@ -56,7 +63,19 @@ export async function submitAndGradeEssay(params: {
     });
 
     const { data, overall, meta } = result;
-    logAiDebug(meta);
+
+    // Essay-level warnings are provider-agnostic, so the pipeline adds them to
+    // whatever the provider reported (see lib/ai/warnings.ts).
+    const warnings: GradingWarning[] = mergeWarnings(
+      meta.warnings as GradingWarning[],
+      computeEvaluationWarnings({
+        data,
+        overall,
+        wordCount,
+        minWords: env.writingMinWords,
+      })
+    );
+    logAiDebug({ ...meta, warnings });
 
     await prisma.$transaction([
       prisma.score.create({
@@ -111,6 +130,7 @@ export async function submitAndGradeEssay(params: {
           validationStatus: meta.validationStatus,
           inputTokens: meta.inputTokens,
           outputTokens: meta.outputTokens,
+          warnings,
         },
       }),
       prisma.submission.update({
@@ -128,6 +148,9 @@ export async function submitAndGradeEssay(params: {
     // Keep the full diagnostics when the grader reported them; otherwise
     // fall back to what the provider object knows (never a secret).
     const gradingError = error instanceof AIGradingError ? error.details : undefined;
+    // `grader` may be undefined when provider configuration itself failed.
+    const failureProvider = gradingError?.provider ?? grader?.provider ?? "unconfigured";
+    const failureModel = gradingError?.model ?? grader?.model ?? "unconfigured";
 
     console.error(
       "[writing] grading failed for submission",
@@ -139,9 +162,9 @@ export async function submitAndGradeEssay(params: {
       prisma.aiEvaluation.create({
         data: {
           submissionId: submission.id,
-          provider: gradingError?.provider ?? grader.provider,
-          model: gradingError?.model ?? grader.model,
-          promptVersion: gradingError?.promptVersion ?? grader.promptVersion ?? "unknown",
+          provider: failureProvider,
+          model: failureModel,
+          promptVersion: gradingError?.promptVersion ?? grader?.promptVersion ?? "unknown",
           rawResponse: gradingError?.rawResponse
             ? gradingError.rawResponse
             : `ERROR: ${sanitizeAiText(error instanceof Error ? error.message : String(error))}`,
@@ -150,6 +173,7 @@ export async function submitAndGradeEssay(params: {
           attempts: gradingError?.attempts ?? null,
           retryCount: gradingError?.retryCount ?? null,
           validationStatus: gradingError?.validationStatus ?? "PROVIDER_ERROR",
+          warnings: [],
         },
       }),
       prisma.submission.update({
@@ -173,6 +197,7 @@ export async function submitAndGradeEssay(params: {
             validationErrors: gradingError.validationErrors,
             inputTokens: null,
             outputTokens: null,
+            warnings: [],
           })
         : undefined,
     };

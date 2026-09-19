@@ -10,7 +10,11 @@ import { AIGradingError } from "@/lib/ai/gemini";
 import { MockGrader } from "@/lib/ai/mock";
 import { finalizeGradingResult } from "@/lib/ai/result";
 import type { AIGrader, GradingMeta, WritingGradingResponse } from "@/lib/ai/schema";
-import { submitAndGradeEssay, getOwnSubmission, getSubmissionAiEvaluations } from "@/lib/writing/service";
+import {
+  submitAndGradeEssay,
+  getOwnSubmission,
+  getSubmissionAiEvaluations,
+} from "@/lib/writing/service";
 
 process.env.DATABASE_URL ??= "postgresql://axi:axi@localhost:5432/axi";
 
@@ -72,6 +76,7 @@ function meta(overrides: Partial<GradingMeta> = {}): GradingMeta {
     validationErrors: [],
     inputTokens: 1000,
     outputTokens: 300,
+    warnings: [],
     ...overrides,
   };
 }
@@ -359,5 +364,89 @@ describe("score consistency", () => {
       grammar,
     });
     expect(overall).toBe(recomputed);
+  });
+});
+
+describe("warnings persistence", () => {
+  it("stores the operator warnings produced by the grader", async () => {
+    setGraderForTesting(
+      graderReturning(aiPayload({ overall: 9 }), {
+        warnings: ["AI_OVERALL_MISMATCH", "ESSAY_UNDER_MIN_WORDS"],
+      })
+    );
+
+    const { submissionId } = await submitAndGradeEssay({
+      userId: userA.id,
+      input: { question, essay, testType: "TASK_2" },
+      feedbackLocale: "uz",
+    });
+
+    const evaluation = (await getSubmissionAiEvaluations(userA.id, submissionId))[0];
+    expect(evaluation.warnings).toEqual(["AI_OVERALL_MISMATCH", "ESSAY_UNDER_MIN_WORDS"]);
+  });
+
+  it("adds essay-level warnings regardless of the provider (mock included)", async () => {
+    const shortEssay = Array(60).fill("word").join(" ");
+
+    const { submissionId } = await submitAndGradeEssay({
+      userId: userA.id,
+      input: { question, essay: shortEssay, testType: "TASK_2" },
+      feedbackLocale: "uz",
+    });
+
+    const evaluation = (await getSubmissionAiEvaluations(userA.id, submissionId))[0];
+    expect(evaluation.warnings).toContain("ESSAY_UNDER_MIN_WORDS");
+  });
+
+  it("defaults to an empty warning list", async () => {
+    const { submissionId } = await submitAndGradeEssay({
+      userId: userA.id,
+      input: { question, essay, testType: "TASK_2" },
+      feedbackLocale: "uz",
+    });
+
+    const evaluation = (await getSubmissionAiEvaluations(userA.id, submissionId))[0];
+    expect(evaluation.warnings).toEqual([]);
+  });
+});
+
+describe("provider misconfiguration", () => {
+  it("marks the submission FAILED instead of leaving it PENDING when the grader cannot be built", async () => {
+    const originalMode = process.env.AI_MODE;
+    const originalKey = process.env.GEMINI_API_KEY;
+
+    process.env.AI_MODE = "gemini";
+    delete process.env.GEMINI_API_KEY;
+    setGraderForTesting(undefined);
+
+    try {
+      const result = await submitAndGradeEssay({
+        userId: userA.id,
+        input: { question, essay, testType: "TASK_2" },
+        feedbackLocale: "uz",
+      });
+
+      expect(result.status).toBe("FAILED");
+
+      const stored = await prisma.submission.findUnique({
+        where: { id: result.submissionId },
+        include: { aiEvaluations: true, score: true },
+      });
+      expect(stored?.status).toBe("FAILED");
+      expect(stored?.score).toBeNull();
+      expect(stored?.aiEvaluations[0]).toMatchObject({
+        success: false,
+        provider: "unconfigured",
+        validationStatus: "PROVIDER_ERROR",
+      });
+      // The recorded failure explains the problem without exposing a secret.
+      expect(stored?.aiEvaluations[0].rawResponse).toContain("GEMINI_API_KEY");
+      expect(stored?.aiEvaluations[0].rawResponse).not.toMatch(/AIza[0-9A-Za-z_-]{10,}/);
+    } finally {
+      if (originalMode === undefined) delete process.env.AI_MODE;
+      else process.env.AI_MODE = originalMode;
+      if (originalKey !== undefined) process.env.GEMINI_API_KEY = originalKey;
+      setGraderForTesting(new MockGrader());
+    }
   });
 });

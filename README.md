@@ -107,7 +107,7 @@ cp .env.example .env       # then edit values
 | `GEMINI_MAX_ATTEMPTS`       | Retry budget per grading (default 3; 1 = no retry)     |
 | `GEMINI_TIMEOUT_MS`         | Timeout for one Gemini request (default 60000)         |
 | `GEMINI_RETRY_BASE_MS`      | Base delay for exponential backoff (default 800)       |
-| `AI_DEBUG`                  | `true`/`false`, empty = auto (on outside production)   |
+| `AI_DEBUG`                  | Dev-only diagnostics; **always off in production**     |
 | `SMS_MODE`                  | `mock` (logs code to console) or `live`                |
 | `PAYMENT_MODE`              | `mock`, `click`, or `payme`                            |
 | `NEXT_PUBLIC_APP_URL`       | Public app URL                                         |
@@ -166,13 +166,15 @@ npm run dev        # terminal 2 → http://localhost:3000
 npm test
 ```
 
-104 tests across 12 suites: grading schema validation, IELTS score rounding
+139 tests across 15 suites: grading schema validation, IELTS score rounding
 incl. .25/.75 boundaries, input validation, retry/backoff/fail-fast behaviour
 of the Gemini grader (injected transport — no network), invalid JSON / missing
 field / invalid band / unsupported category handling, secret redaction, debug
 gating, prompt version registry, calibration fixtures, submission creation,
-prompt-version & token-usage persistence, and authorization (users cannot read
-others' submissions). Tests never call the real Gemini API.
+prompt-version & token-usage persistence, warning calculation/persistence,
+provider factory configuration, static security guards (no client-side provider
+imports, no hardcoded keys, no raw SQL, `.env` ignored), and authorization
+(users cannot read others' submissions). Tests never call the real Gemini API.
 
 ## Production build
 
@@ -200,7 +202,8 @@ vs V2 will be compared on the same essays.
 
 ```bash
 npm run calibrate                        # whole set, active AI_PROMPT_VERSION
-npm run calibrate -- --prompt V1         # compare against the original prompt
+npm run calibrate -- --compare           # V1 and V2 side by side, same essays
+npm run calibrate -- --prompt V1
 npm run calibrate -- --id strong --id weak
 npm run calibrate -- --locale uz --delay 2000
 npm run calibrate -- --out calibration-report.json
@@ -225,9 +228,15 @@ meta: provider=gemini model=gemini-1.5-flash prompt=WRITING_GRADING_PROMPT_V2
       latency=8123ms attempts=1 retries=0 validation=VALID tokens=1620/498
 ```
 
-plus a summary table with the mean absolute difference and exact-match count.
+plus a per-criterion accuracy table (mean absolute difference, exact matches and
+signed bias — positive bias means the model scored above the reference), a
+summary table with the overall numbers, and with `--compare` a V1-vs-V2 table
+over the same essays including which prompt landed closer per essay.
+
 The utility reuses the production prompt builders, Zod schema and scoring code,
 so what you measure is exactly what users get. It never touches the database.
+It reports measurements only — a prompt is not declared "better" by this script;
+that requires a larger, independently scored sample.
 
 The fixture set (`scripts/calibration/essays.json`) is synthetic and covers:
 weak, average, strong, grammar-heavy, vocabulary-heavy, poor-task-response and
@@ -257,10 +266,20 @@ without an API key.
 - **Secrets never leak.** Provider errors are scrubbed of key material before
   logging or storage; the key itself is only read inside
   `src/lib/ai/gemini.ts` (server-side).
+- **Operator warnings.** Each evaluation can carry non-fatal `warnings`
+  (`AI_OVERALL_MISMATCH`, `RAW_RESPONSE_TRUNCATED`, `ESSAY_UNDER_MIN_WORDS`,
+  `LOW_OUTPUT_TOKENS`). Provider-level warnings are reported by the AI layer,
+  essay-level ones by the pipeline, so they behave identically for every
+  provider. They never change the user's scores.
 - **Dev diagnostics.** Outside production, grading logs one line with model,
   prompt version, processing time, attempts, validation status and token usage,
-  and `POST /api/writing/submit` also returns a `debug` object. In production the
-  field is absent and nothing is logged.
+  and `POST /api/writing/submit` also returns a `debug` object. In production
+  neither is ever emitted — the check is hardcoded in `lib/env.ts`, so even a
+  copied `.env` with `AI_DEBUG=true` cannot turn it on.
+- **Misconfiguration degrades safely.** If the provider cannot be constructed
+  (e.g. `AI_MODE=gemini` without `GEMINI_API_KEY`), the submission is marked
+  `FAILED` with an evaluator row explaining the cause — it never stays `PENDING`
+  or crashes the request.
 
 ---
 

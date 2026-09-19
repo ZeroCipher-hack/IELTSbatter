@@ -3,10 +3,13 @@
  * AXI — Writing grader calibration utility.
  *
  * Runs the configured AI grader over the synthetic calibration set and prints
- * an expected-vs-AI comparison for every criterion plus the overall band.
+ * an expected-vs-AI comparison for every criterion plus the overall band, the
+ * per-criterion mean absolute difference, and (with --compare) a V1-vs-V2
+ * side-by-side table over the same essays.
  *
  * Usage:
  *   npm run calibrate
+ *   npm run calibrate -- --compare
  *   npm run calibrate -- --prompt V1
  *   npm run calibrate -- --id weak --id strong
  *   npm run calibrate -- --model gemini-1.5-pro --locale ru
@@ -17,18 +20,19 @@
  *    calibration run measures exactly what users get.
  *  - Reference ("expected") scores come from the fixture file and are optional;
  *    without them the script still prints the AI output.
- *  - Never writes to the database and never uses real user data.
+ *  - Never writes to the database, never uses real user data, and never prints
+ *    the API key.
+ *  - Results are measurements only: the script never declares a prompt "good".
  */
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { computeOverall, countWords } from "../src/lib/utils/scoring";
+import { computeOverall, countWords, type CriterionScores } from "../src/lib/utils/scoring";
 import { buildWritingGradingPromptForVersion, promptVersionFromLabel } from "../src/lib/ai/prompts";
 import { GeminiGrader, AIGradingError } from "../src/lib/ai/gemini";
 import { MockGrader } from "../src/lib/ai/mock";
-import { writingGradingResponseSchema, type AIGrader, type ValidationStatus } from "../src/lib/ai/schema";
+import type { AIGrader, ValidationStatus } from "../src/lib/ai/schema";
 import type { WritingPromptVersion } from "../src/lib/ai/prompts";
-import type { CriterionScores } from "../src/lib/utils/scoring";
 
 // ---------------------------------------------------------------- env / args
 
@@ -43,6 +47,7 @@ interface CliArgs {
   ids: string[];
   file: string;
   prompt: WritingPromptVersion;
+  compare: boolean;
   locale: string;
   model?: string;
   out?: string;
@@ -54,6 +59,7 @@ function parseArgs(argv: string[]): CliArgs {
     ids: [],
     file: path.join("scripts", "calibration", "essays.json"),
     prompt: promptVersionFromLabel(process.env.AI_PROMPT_VERSION ?? "V2"),
+    compare: false,
     locale: "en",
     delayMs: 1500,
   };
@@ -70,6 +76,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--prompt":
         args.prompt = promptVersionFromLabel(next());
+        break;
+      case "--compare":
+        args.compare = true;
         break;
       case "--locale":
         args.locale = next();
@@ -101,6 +110,7 @@ Options:
   --id <fixtureId>      run only the given essay (repeatable)
   --file <path>         fixture file (default: scripts/calibration/essays.json)
   --prompt <V1|V2>      prompt version to test (default: AI_PROMPT_VERSION or V2)
+  --compare             run BOTH V1 and V2 over the same essays (2x API calls)
   --locale <uz|ru|en>   feedback language sent to the model (default: en)
   --model <name>        override GEMINI_MODEL for this run
   --delay <ms>          pause between essays to respect API rate limits (default: 1500)
@@ -137,9 +147,9 @@ function loadFixtures(file: string): FixtureFile {
 
 // -------------------------------------------------------------------- grader
 
-function createGrader(args: CliArgs, useMock: boolean): AIGrader {
-  if (useMock) return new MockGrader(args.prompt);
-  return new GeminiGrader({ promptVersion: args.prompt, model: args.model });
+function createGrader(args: CliArgs, promptVersion: WritingPromptVersion, useMock: boolean): AIGrader {
+  if (useMock) return new MockGrader(promptVersion);
+  return new GeminiGrader({ promptVersion, model: args.model });
 }
 
 // --------------------------------------------------------------------- output
@@ -163,6 +173,20 @@ function delta(actual: number, expected: number | undefined): string {
   return `  (${sign}${d.toFixed(1)})`;
 }
 
+interface RunMeta {
+  provider: string;
+  model: string;
+  promptVersion: string;
+  latencyMs: number;
+  attempts: number;
+  retryCount: number;
+  validationStatus: ValidationStatus;
+  validationErrors: string[];
+  inputTokens: number | null;
+  outputTokens: number | null;
+  warnings: string[];
+}
+
 interface RunResult {
   id: string;
   label?: string;
@@ -171,19 +195,78 @@ interface RunResult {
   expected?: CriterionScores;
   expectedOverall?: number;
   actual?: CriterionScores & { overall: number };
-  meta?: {
-    provider: string;
-    model: string;
-    promptVersion: string;
-    latencyMs: number;
-    attempts: number;
-    retryCount: number;
-    validationStatus: ValidationStatus;
-    validationErrors: string[];
-    inputTokens: number | null;
-    outputTokens: number | null;
-  };
+  meta?: RunMeta;
   error?: string;
+}
+
+/** Run one grader over one essay and normalize the outcome for reporting. */
+async function runOne(
+  grader: AIGrader,
+  fixture: FixtureEssay,
+  question: string,
+  locale: string
+): Promise<RunResult> {
+  const base = {
+    id: fixture.id,
+    label: fixture.label,
+    words: countWords(fixture.essay),
+    expected: fixture.expected,
+    expectedOverall: fixture.expected ? computeOverall(fixture.expected) : undefined,
+  };
+
+  try {
+    const result = await grader.gradeWriting({
+      question,
+      essay: fixture.essay,
+      feedbackLocale: locale,
+    });
+    return {
+      ...base,
+      ok: true,
+      actual: {
+        taskResponse: result.data.scores.taskResponse.band,
+        coherenceCohesion: result.data.scores.coherenceCohesion.band,
+        lexicalResource: result.data.scores.lexicalResource.band,
+        grammar: result.data.scores.grammar.band,
+        overall: result.overall,
+      },
+      meta: {
+        provider: result.meta.provider,
+        model: result.meta.model,
+        promptVersion: result.meta.promptVersion,
+        latencyMs: result.meta.latencyMs,
+        attempts: result.meta.attempts,
+        retryCount: result.meta.retryCount,
+        validationStatus: result.meta.validationStatus,
+        validationErrors: result.meta.validationErrors,
+        inputTokens: result.meta.inputTokens,
+        outputTokens: result.meta.outputTokens,
+        warnings: result.meta.warnings,
+      },
+    };
+  } catch (error) {
+    const details = error instanceof AIGradingError ? error.details : undefined;
+    return {
+      ...base,
+      ok: false,
+      error: details ? details.reason : error instanceof Error ? error.message : String(error),
+      meta: details
+        ? {
+            provider: details.provider,
+            model: details.model,
+            promptVersion: details.promptVersion,
+            latencyMs: details.latencyMs,
+            attempts: details.attempts,
+            retryCount: details.retryCount,
+            validationStatus: details.validationStatus,
+            validationErrors: details.validationErrors,
+            inputTokens: null,
+            outputTokens: null,
+            warnings: [],
+          }
+        : undefined,
+    };
+  }
 }
 
 function printComparison(result: RunResult): void {
@@ -232,7 +315,65 @@ function printComparison(result: RunResult): void {
         `retries=${result.meta.retryCount} validation=${result.meta.validationStatus} ` +
         `tokens=${result.meta.inputTokens ?? "-"}/${result.meta.outputTokens ?? "-"}`
     );
+    if (result.meta.warnings.length) {
+      console.log(`      warnings=${result.meta.warnings.join(",")}`);
+    }
   }
+}
+
+interface Accuracy {
+  key: string;
+  meanAbsDiff: number;
+  exact: number;
+  n: number;
+  bias: number;
+}
+
+/** Mean absolute difference / exact matches / signed bias per criterion. */
+function accuracyFor(results: RunResult[]): Accuracy[] {
+  const scored = results.filter((r) => r.ok && r.actual && r.expected);
+  const n = scored.length;
+
+  const pick = (r: RunResult, key: "overall" | keyof CriterionScores): number =>
+    key === "overall" ? r.actual!.overall : r.actual![key];
+  const exp = (r: RunResult, key: "overall" | keyof CriterionScores): number =>
+    key === "overall" ? r.expectedOverall! : r.expected![key];
+
+  const rows: Accuracy[] = [
+    ...CRITERIA.map((c) => ({ key: c.title, k: c.key })),
+    { key: "Overall", k: "overall" as const },
+  ].map(({ key, k }) => ({
+    key,
+    n,
+    meanAbsDiff: n
+      ? scored.reduce((sum, r) => sum + Math.abs(pick(r, k) - exp(r, k)), 0) / n
+      : NaN,
+    exact: scored.filter((r) => pick(r, k) === exp(r, k)).length,
+    bias: n ? scored.reduce((sum, r) => sum + (pick(r, k) - exp(r, k)), 0) / n : NaN,
+  }));
+
+  return rows;
+}
+
+function printAccuracy(results: RunResult[]): void {
+  const rows = accuracyFor(results);
+  if (!rows.length || Number.isNaN(rows[0].meanAbsDiff)) {
+    console.log("\n(no reference scores in this selection — accuracy metrics skipped)");
+    return;
+  }
+
+  console.log("\n=== ACCURACY vs reference (measured, not a pass/fail verdict) ===");
+  console.table(
+    rows.map((r) => ({
+      Criterion: r.key,
+      "MeanAbsDiff": r.meanAbsDiff.toFixed(2),
+      "Exact": `${r.exact}/${r.n}`,
+      "MeanSignedBias": (r.bias > 0 ? "+" : "") + r.bias.toFixed(2),
+    }))
+  );
+  console.log(
+    "MeanSignedBias > 0 means the model scored higher than the reference on average; < 0 means lower."
+  );
 }
 
 function printSummaryTable(results: RunResult[]): void {
@@ -264,9 +405,59 @@ function printSummaryTable(results: RunResult[]): void {
         `exact matches = ${exact}/${withExpected.length}`
     );
   }
+  printAccuracy(results);
+}
+
+/** V1 vs V2 side-by-side over the same essays. */
+function printPromptComparison(v1: RunResult[], v2: RunResult[]): void {
+  const rows = v1.map((a, i) => {
+    const b = v2[i];
+    const exp = a.expectedOverall;
+    const d1 = a.actual && exp != null ? a.actual.overall - exp : undefined;
+    const d2 = b?.actual && exp != null ? b.actual.overall - exp : undefined;
+    return {
+      Essay: a.id,
+      Ref: band(exp),
+      V1: band(a.actual?.overall),
+      "V1 Δ": d1 == null ? "n/a" : `${d1 > 0 ? "+" : ""}${d1.toFixed(1)}`,
+      V2: band(b?.actual?.overall),
+      "V2 Δ": d2 == null ? "n/a" : `${d2 > 0 ? "+" : ""}${d2.toFixed(1)}`,
+      Closer: d1 == null || d2 == null ? "n/a" : Math.abs(d1) === Math.abs(d2) ? "tie" : Math.abs(d1) < Math.abs(d2) ? "V1" : "V2",
+      "V1 att.": a.meta ? String(a.meta.attempts) : "-",
+      "V2 att.": b?.meta ? String(b.meta.attempts) : "-",
+    };
+  });
+
+  console.log("\n\n=== V1 vs V2 (same essays, same model) ===");
+  console.table(rows);
+
+  for (const [label, results] of [
+    ["V1", v1],
+    ["V2", v2],
+  ] as const) {
+    const scored = results.filter((r) => r.ok && r.actual && r.expectedOverall != null);
+    if (!scored.length) continue;
+    const mad =
+      scored.reduce((s, r) => s + Math.abs(r.actual!.overall - r.expectedOverall!), 0) / scored.length;
+    const exact = scored.filter((r) => r.actual!.overall === r.expectedOverall).length;
+    const latencies = results.filter((r) => r.meta).map((r) => r.meta!.latencyMs);
+    const meanLatency = latencies.length
+      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
+      : null;
+    console.log(
+      `${label}: meanAbsDiff=${mad.toFixed(2)} band, exact=${exact}/${scored.length}` +
+        (meanLatency != null ? `, meanLatency=${meanLatency}ms` : "")
+    );
+  }
+  console.log(
+    "Reporting only: these are measurements on this sample. A prompt is not \"better\" until a larger,\n" +
+      "independently scored essay set says so."
+  );
 }
 
 // ----------------------------------------------------------------------- main
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -281,14 +472,17 @@ async function main(): Promise<void> {
   }
 
   const useMock = (process.env.AI_MODE ?? (process.env.GEMINI_API_KEY ? "gemini" : "mock")) !== "gemini";
-  const grader = createGrader(args, useMock);
+  const promptsToRun: WritingPromptVersion[] = args.compare
+    ? ["WRITING_GRADING_PROMPT_V1", "WRITING_GRADING_PROMPT_V2"]
+    : [args.prompt];
 
   console.log("AXI writing grader calibration");
   console.log(`  file          : ${args.file}`);
   console.log(`  essays        : ${essays.map((e) => e.id).join(", ")}`);
-  console.log(`  prompt version: ${args.prompt}`);
+  console.log(`  prompt(s)     : ${promptsToRun.join(", ")}${args.compare ? " (compare mode — 2x calls)" : ""}`);
   console.log(`  feedback lang : ${args.locale}`);
-  console.log(`  provider      : ${grader.provider} (model: ${grader.model})`);
+  console.log(`  provider      : ${useMock ? "mock" : "gemini"}`);
+
   if (useMock) {
     console.log(
       "\n  NOTE: AI_MODE is not \"gemini\" (or GEMINI_API_KEY is missing) — running the\n" +
@@ -300,116 +494,70 @@ async function main(): Promise<void> {
     console.log("  NOTE: a GEMINI_API_KEY exists but AI_MODE is not set to gemini.");
   }
 
-  // Sanity check: the prompt for the selected version must build.
-  const samplePrompt = buildWritingGradingPromptForVersion(args.prompt, {
+  const promptChars = buildWritingGradingPromptForVersion(promptsToRun[0], {
     question: fixtures.question,
     essay: essays[0].essay,
     feedbackLocale: args.locale,
-  });
-  console.log(`  prompt chars  : ${samplePrompt.length}`);
+  }).length;
+  console.log(`  prompt chars  : ${promptChars}`);
 
-  const results: RunResult[] = [];
+  const byPrompt: Record<string, RunResult[]> = {};
+  let callIndex = 0;
 
-  for (const fixture of essays) {
-    if (!fixture.expected) {
-      console.log(`\n[${fixture.id}] no reference score — printing AI output only`);
-    }
-    try {
-      const result = await grader.gradeWriting({
-        question: fixtures.question,
-        essay: fixture.essay,
-        feedbackLocale: args.locale,
-      });
-      results.push({
-        id: fixture.id,
-        label: fixture.label,
-        words: countWords(fixture.essay),
-        ok: true,
-        expected: fixture.expected,
-        expectedOverall: fixture.expected ? computeOverall(fixture.expected) : undefined,
-        actual: {
-          taskResponse: result.data.scores.taskResponse.band,
-          coherenceCohesion: result.data.scores.coherenceCohesion.band,
-          lexicalResource: result.data.scores.lexicalResource.band,
-          grammar: result.data.scores.grammar.band,
-          overall: result.overall,
-        },
-        meta: {
-          provider: result.meta.provider,
-          model: result.meta.model,
-          promptVersion: result.meta.promptVersion,
-          latencyMs: result.meta.latencyMs,
-          attempts: result.meta.attempts,
-          retryCount: result.meta.retryCount,
-          validationStatus: result.meta.validationStatus,
-          validationErrors: result.meta.validationErrors,
-          inputTokens: result.meta.inputTokens,
-          outputTokens: result.meta.outputTokens,
-        },
-      });
-    } catch (error) {
-      const details = error instanceof AIGradingError ? error.details : undefined;
-      results.push({
-        id: fixture.id,
-        label: fixture.label,
-        words: countWords(fixture.essay),
-        ok: false,
-        expected: fixture.expected,
-        expectedOverall: fixture.expected ? computeOverall(fixture.expected) : undefined,
-        error: details ? details.reason : error instanceof Error ? error.message : String(error),
-        meta: details
-          ? {
-              provider: details.provider,
-              model: details.model,
-              promptVersion: details.promptVersion,
-              latencyMs: details.latencyMs,
-              attempts: details.attempts,
-              retryCount: details.retryCount,
-              validationStatus: details.validationStatus,
-              validationErrors: details.validationErrors,
-              inputTokens: null,
-              outputTokens: null,
-            }
-          : undefined,
-      });
+  for (const promptVersion of promptsToRun) {
+    const grader = createGrader(args, promptVersion, useMock);
+    const results: RunResult[] = [];
+
+    for (const fixture of essays) {
+      if (!fixture.expected) {
+        console.log(`\n[${fixture.id}] no reference score — printing AI output only`);
+      }
+      if (callIndex > 0 && args.delayMs > 0) await sleep(args.delayMs);
+
+      const result = await runOne(grader, fixture, fixtures.question, args.locale);
+      results.push(result);
+      callIndex++;
+
+      if (!args.compare) printComparison(result);
     }
 
-    printComparison(results[results.length - 1]);
-    if (args.delayMs > 0 && essays.length > 1) {
-      await new Promise((r) => setTimeout(r, args.delayMs));
+    byPrompt[promptVersion] = results;
+
+    if (results.some((r) => r.meta)) {
+      console.log(`\n[${promptVersion}] model=${results.find((r) => r.meta)?.meta?.model}`);
     }
   }
 
-  printSummaryTable(results);
-
-  // Self-check on the code path the app uses (guards against schema drift).
-  const schemaOk = results.every((r) => !r.actual || writingGradingResponseSchema.safeParse({
-    scores: {
-      taskResponse: { band: r.actual.taskResponse, note: "-" },
-      coherenceCohesion: { band: r.actual.coherenceCohesion, note: "-" },
-      lexicalResource: { band: r.actual.lexicalResource, note: "-" },
-      grammar: { band: r.actual.grammar, note: "-" },
-    },
-    summary: "-",
-    strengths: ["-"],
-    weaknesses: ["-"],
-    improvements: ["-"],
-    errors: [],
-  }).success);
-  if (!schemaOk) {
-    console.error("WARNING: an AI band was not schema-valid — investigate immediately.");
+  if (args.compare) {
+    printPromptComparison(
+      byPrompt["WRITING_GRADING_PROMPT_V1"] ?? [],
+      byPrompt["WRITING_GRADING_PROMPT_V2"] ?? []
+    );
+  } else {
+    printSummaryTable(byPrompt[promptsToRun[0]]);
   }
 
   if (args.out) {
     const report = {
       generatedAt: new Date().toISOString(),
-      promptVersion: args.prompt,
-      provider: grader.provider,
-      model: grader.model,
+      provider: useMock ? "mock" : "gemini",
+      model: Object.values(byPrompt)
+        .flat()
+        .find((r) => r.meta)?.meta?.model,
       mock: useMock,
       locale: args.locale,
       question: fixtures.question,
-      results,
+      runs: Object.entries(byPrompt).map(([promptVersion, results]) => ({
+        promptVersion,
+        accuracy: accuracyFor(results).map((a) => ({
+          criterion: a.key,
+          meanAbsDiff: Number.isNaN(a.meanAbsDiff) ? null : Number(a.meanAbsDiff.toFixed(3)),
+          meanSignedBias: Number.isNaN(a.bias) ? null : Number(a.bias.toFixed(3)),
+          exact: a.exact,
+          n: a.n,
+        })),
+        results,
+      })),
     };
     const outPath = path.resolve(process.cwd(), args.out);
     fs.writeFileSync(outPath, JSON.stringify(report, null, 2));

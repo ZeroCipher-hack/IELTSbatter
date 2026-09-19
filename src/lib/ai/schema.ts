@@ -89,6 +89,8 @@ export interface GradingMeta {
   /** Cost-control placeholders; null when the provider does not report them. */
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Non-fatal observations persisted for operators (see lib/ai/warnings.ts). */
+  warnings: string[];
 }
 
 export interface WritingGradingInput {

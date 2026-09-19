@@ -54,11 +54,16 @@ export const env = {
     const raw = (process.env.AI_PROMPT_VERSION ?? "V2").toUpperCase().replace(/^WRITING_GRADING_PROMPT_/, "");
     return raw === "V1" ? "V1" : "V2";
   },
-  /** Expose AI diagnostics (model, prompt version, retries, latency) in dev. */
+  /**
+   * Expose AI diagnostics (model, prompt version, retries, latency).
+   * HARD RULE: never in production — not even if AI_DEBUG=true leaks into the
+   * production environment via a copied .env file.
+   */
   get aiDebug(): boolean {
+    if (process.env.NODE_ENV === "production") return false;
     if (process.env.AI_DEBUG === "true") return true;
     if (process.env.AI_DEBUG === "false") return false;
-    return process.env.NODE_ENV !== "production";
+    return true;
   },
   /** "mock" | "live" */
   get smsMode(): string {

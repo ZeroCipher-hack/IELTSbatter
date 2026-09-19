@@ -155,6 +155,8 @@ model AiEvaluation {
   validationStatus String?  @default("VALID")
   inputTokens      Int?
   outputTokens     Int?
+  // Non-fatal operator observations (see src/lib/ai/warnings.ts).
+  warnings         String[] @default([])
   createdAt     DateTime   @default(now())
 
   @@index([submissionId])

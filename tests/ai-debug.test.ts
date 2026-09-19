@@ -18,6 +18,7 @@ const meta: GradingMeta = {
   validationErrors: [],
   inputTokens: 1500,
   outputTokens: 420,
+  warnings: [],
 };
 
 const original = { debug: process.env.AI_DEBUG, nodeEnv: process.env.NODE_ENV };
@@ -46,6 +47,11 @@ describe("AI debug info", () => {
     });
   });
 
+  it("never exposes stored warnings (they are operator metadata)", () => {
+    const info = buildAiDebugInfo({ ...meta, warnings: ["AI_OVERALL_MISMATCH"] });
+    expect(JSON.stringify(info)).not.toContain("AI_OVERALL_MISMATCH");
+  });
+
   it("never contains the raw provider response or any key material", () => {
     const info = buildAiDebugInfo({ ...meta, rawResponse: "API key AIzaSyD-EXAMPLE-KEY-1234567890" });
     expect(JSON.stringify(info)).not.toMatch(/AIza|rawResponse/);
@@ -57,10 +63,10 @@ describe("AI debug info", () => {
     expect(debugInfoForResponse(meta)).toBeUndefined();
   });
 
-  it("can be forced on with AI_DEBUG=true even in production", () => {
+  it("stays hidden in production even when AI_DEBUG=true is set", () => {
     vi.stubEnv("NODE_ENV", "production");
     process.env.AI_DEBUG = "true";
-    expect(debugInfoForResponse(meta)?.model).toBe("gemini-1.5-flash");
+    expect(debugInfoForResponse(meta)).toBeUndefined();
   });
 
   it("can be forced off in development", () => {

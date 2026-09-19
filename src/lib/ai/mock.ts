@@ -109,6 +109,7 @@ export class MockGrader implements AIGrader {
         validationErrors: [],
         inputTokens: null,
         outputTokens: null,
+        warnings: [],
       },
     });
   }
