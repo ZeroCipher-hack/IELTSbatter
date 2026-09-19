@@ -324,6 +324,7 @@
     "recordAgain": "Qaytadan yozish",
     "uploading": "Yuklanmoqda...",
     "evaluating": "Baholanmoqda...",
+    "retryEvaluation": "Baholashni qayta urinish",
     "yourRecording": "Sizning yozuvingiz",
     "recordingSize": "Hajmi: {kb} KB",
     "micHint": "Mikrofonga ruxsat so'raladi. Yozuv faqat sizga ko'rinadi va baholash serverda amalga oshiriladi.",

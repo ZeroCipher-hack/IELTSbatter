@@ -6,12 +6,16 @@ import {
   transitionSpeakingInterview,
 } from "@/lib/speaking/service";
 import { apiError, handleApiError } from "@/lib/utils/api";
+import { rateLimit } from "@/lib/utils/rate-limit";
 
 const schema = z.object({ action: z.literal("BEGIN_PART") }).strict();
 
 export async function POST(request: Request, props: { params: Promise<{ id: string }> }) {
   try {
     const session = await requireSession();
+    if (!(await rateLimit(`speaking-transition:user:${session.userId}`, { limit: 30, windowMs: 60_000 }))) {
+      return apiError(429, "rate_limited");
+    }
     const { id } = await props.params;
     const input = schema.parse(await request.json());
     const interview = await transitionSpeakingInterview({

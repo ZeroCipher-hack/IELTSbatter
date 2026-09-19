@@ -96,12 +96,16 @@ beforeAll(async () => {
 afterEach(async () => {
   setSpeakingProvidersForTesting({});
   resetStorage();
-  await prisma.submission.deleteMany({ where: { userId: { in: [userA.id, userB.id] }, module: "SPEAKING" } });
+  if (userA && userB) {
+    await prisma.submission.deleteMany({ where: { userId: { in: [userA.id, userB.id] }, module: "SPEAKING" } });
+  }
 });
 
 afterAll(async () => {
-  await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
-  await prisma.test.deleteMany({ where: { id: testId } });
+  if (userA && userB) {
+    await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
+  }
+  if (testId) await prisma.test.deleteMany({ where: { id: testId } });
   setSpeakingProvidersForTesting({});
   resetStorage();
   await prisma.$disconnect();
@@ -155,7 +159,7 @@ describe("server-side interview recovery", () => {
     const interview = await createOrResumeSpeakingInterview({ userId: userA.id, testId });
     await prisma.speakingInterview.update({
       where: { id: interview!.id },
-      data: { state: "PART_1", stateStartedAt: new Date(Date.now() - 2 * 60_000) },
+      data: { state: "PART_1", stateStartedAt: new Date(Date.now() - 5 * 60_000) },
     });
     const recovered = await recoverSpeakingInterview(userA.id, interview!.id);
     expect(recovered).toMatchObject({ state: "FAILED", failureReason: "timer_expired" });

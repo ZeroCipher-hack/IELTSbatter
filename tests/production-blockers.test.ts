@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { MemoryStorage } from "@/lib/storage";
 import { buildContentSecurityPolicy, generateCspNonce, isValidCspNonce } from "@/lib/security/csp";
-import { decideBeginPart, timerRemaining } from "@/lib/speaking/state-machine";
+import { decideBeginPart, partTimerSeconds, timerRemaining } from "@/lib/speaking/state-machine";
 import { parseIdempotencyKey, writingRequestFingerprint } from "@/lib/writing/idempotency";
 import { MemoryRateLimitStore, rateLimit, resetRateLimitsForTesting } from "@/lib/utils/rate-limit";
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
+import fs from "node:fs";
 
 describe("speaking state machine", () => {
   it("recovers timers from persisted server timestamps", () => {
@@ -20,6 +21,17 @@ describe("speaking state machine", () => {
   it("makes a duplicate transition idempotent", () => {
     expect(decideBeginPart("PART_2", 2, 0)).toEqual({ kind: "IDEMPOTENT" });
     expect(decideBeginPart("PREPARING", 3, 0)).toEqual({ kind: "APPLY", next: "PART_3" });
+  });
+  it("keeps every prompt in a part inside the server timer", () => {
+    const prompts = [
+      { part: 1, preparationSeconds: 5, speakingSeconds: 45 },
+      { part: 1, preparationSeconds: 5, speakingSeconds: 45 },
+      { part: 1, preparationSeconds: 5, speakingSeconds: 45 },
+      { part: 2, preparationSeconds: 60, speakingSeconds: 120 },
+    ];
+    expect(partTimerSeconds(prompts, 1, "PREPARING")).toBe(5);
+    expect(partTimerSeconds(prompts, 1, "SPEAKING")).toBe(135);
+    expect(partTimerSeconds(prompts, 2, "SPEAKING")).toBe(120);
   });
 });
 
@@ -79,5 +91,23 @@ describe("CSP preparation", () => {
     const header = response.headers.get("content-security-policy-report-only");
     expect(header).toContain("script-src 'nonce-");
     expect(response.headers.get("content-security-policy")).toBeNull();
+  });
+});
+
+describe("authenticated E2E contract", () => {
+  it("covers durable writing retries and the three-part speaking state machine", () => {
+    const source = fs.readFileSync("scripts/e2e-smoke.mjs", "utf8");
+    expect(source).toContain('headers: { "Idempotency-Key": idempotencyKey }');
+    expect(source).toContain('/transition`');
+    expect(source).toContain('form.append("part", String(part))');
+    expect(source).toContain('part <= 3');
+    expect(source).toContain("duplicate upload is idempotent");
+    expect(source).toContain("refresh recovers state");
+  });
+  it("keeps provider-failure recovery reachable from the speaking UI", () => {
+    const source = fs.readFileSync("src/components/speaking/SpeakingInterview.tsx", "utf8");
+    expect(source).toContain('setPhase("evaluation_error")');
+    expect(source).toContain("evaluateSubmission(interview.submissionId)");
+    expect(source).toContain('t("retryEvaluation")');
   });
 });

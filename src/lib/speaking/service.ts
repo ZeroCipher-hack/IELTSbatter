@@ -30,7 +30,7 @@ import type {
   SpeakingInterviewSnapshot,
   SpeakingTestSummary,
 } from "@/lib/speaking/types";
-import { decideBeginPart, timerRemaining } from "@/lib/speaking/state-machine";
+import { decideBeginPart, partTimerSeconds, timerRemaining } from "@/lib/speaking/state-machine";
 
 export type { PublicSpeakingTest, SpeakingPrompt, SpeakingTestSummary };
 
@@ -119,17 +119,17 @@ function promptForPart(test: PublicSpeakingTest, part: number): SpeakingPrompt |
   return test.prompts.find((prompt) => prompt.part === part);
 }
 
-function timerFor(state: SpeakingInterviewSnapshot["state"], prompt: SpeakingPrompt): number {
-  return state === "PREPARING" ? prompt.preparationSeconds : prompt.speakingSeconds;
-}
-
 async function snapshotInterview(interview: {
   id: string; submissionId: string; testId: string; state: SpeakingInterviewSnapshot["state"];
   currentPart: number; currentPromptId: string; stateStartedAt: Date; failureReason: string | null;
 }, test: PublicSpeakingTest, now = new Date()): Promise<SpeakingInterviewSnapshot> {
   const prompt = test.prompts.find((item) => item.id === interview.currentPromptId) ?? promptForPart(test, interview.currentPart);
   const total = prompt && (interview.state === "PREPARING" || interview.state.startsWith("PART_"))
-    ? timerFor(interview.state, prompt)
+    ? partTimerSeconds(
+        test.prompts,
+        interview.currentPart,
+        interview.state === "PREPARING" ? "PREPARING" : "SPEAKING"
+      )
     : 0;
   return {
     ...interview,
@@ -205,10 +205,10 @@ export async function recoverSpeakingInterview(
     await markSpeakingFailed(interview.submissionId, interview.id, pipelineStale ? "pipeline_timeout" : "interview_timeout");
     interview = await prisma.speakingInterview.findUniqueOrThrow({ where: { id: interview.id } });
   }
-  const prompt = test.prompts.find((item) => item.id === interview!.currentPromptId);
-  if (prompt && interview.state.startsWith("PART_")) {
+  const partSpeakingSeconds = partTimerSeconds(test.prompts, interview.currentPart, "SPEAKING");
+  if (partSpeakingSeconds > 0 && interview.state.startsWith("PART_")) {
     const elapsed = (Date.now() - interview.stateStartedAt.getTime()) / 1000;
-    if (elapsed > prompt.speakingSeconds + TIMER_GRACE_SECONDS) {
+    if (elapsed > partSpeakingSeconds + TIMER_GRACE_SECONDS) {
       interview = await prisma.speakingInterview.update({
         where: { id: interview.id },
         data: { state: "FAILED", failureReason: "timer_expired", completedAt: new Date() },

@@ -116,10 +116,14 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
-  await prisma.test.deleteMany({
-    where: { id: { in: [readingTestId, listeningTestId] } },
-  });
+  if (userA && userB) {
+    await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
+  }
+  if (readingTestId && listeningTestId) {
+    await prisma.test.deleteMany({
+      where: { id: { in: [readingTestId, listeningTestId] } },
+    });
+  }
   await prisma.$disconnect();
 });
 

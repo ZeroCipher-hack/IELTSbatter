@@ -40,7 +40,9 @@ beforeEach(() => {
 });
 
 afterAll(async () => {
-  await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
+  if (userA && userB) {
+    await prisma.user.deleteMany({ where: { id: { in: [userA.id, userB.id] } } });
+  }
   setGraderForTesting(undefined);
   await prisma.$disconnect();
 });

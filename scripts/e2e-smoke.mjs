@@ -88,6 +88,7 @@ async function htmlOk(path, label, needles = []) {
 }
 
 const emailPhone = `+99890${testIdSuffix}`;
+const intruderPhone = `+99891${testIdSuffix}`;
 const password = "E2ePassword123";
 
 async function main() {
@@ -136,8 +137,10 @@ async function main() {
   let writingSubmissionId = null;
   {
     const essay = Array(260).fill("This is a sentence about the topic.").join(" ");
+    const idempotencyKey = `e2e-writing-${crypto.randomUUID()}`;
     const submitted = await api("/api/writing/submit", {
       method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
       body: {
         question: "Some people think technology makes life easier. Discuss both views and give your own opinion.",
         essay,
@@ -160,6 +163,23 @@ async function main() {
 
       const resultPage = await api(`/writing/result/${writingSubmissionId}`);
       check("writing result page renders", resultPage.status === 200, `status ${resultPage.status}`);
+
+      const retried = await api("/api/writing/submit", {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: {
+          question: "Some people think technology makes life easier. Discuss both views and give your own opinion.",
+          essay,
+          testType: "TASK_2",
+        },
+      });
+      const retryBody = await json(retried);
+      check("writing transport retry returns 200", retried.status === 200, `status ${retried.status}`);
+      check("writing retry returns the same submission", retryBody.submissionId === writingSubmissionId);
+      check(
+        "writing idempotency key has one DB row",
+        await prisma.submission.count({ where: { userId: user.id, idempotencyKey } }) === 1
+      );
     }
 
     // A short essay must be rejected rather than graded.
@@ -317,23 +337,73 @@ async function main() {
     check("speaking submission created (201)", started.status === 201, `status ${started.status}`);
     speakingSubmissionId = created.submissionId;
 
-    // Upload a generated WAV (development audio, never real speech).
-    const wav = makeWav(2);
-    const form = new FormData();
-    form.append("audio", new Blob([wav], { type: "audio/wav" }), "answer.wav");
-    form.append("durationSeconds", "2");
-
-    const uploaded = await api(`/api/speaking/submissions/${speakingSubmissionId}/audio`, {
-      method: "POST",
-      form,
+    const interview = await prisma.speakingInterview.findUnique({
+      where: { submissionId: speakingSubmissionId },
     });
-    const uploadBody = await json(uploaded);
-    check("speaking audio upload returns 201", uploaded.status === 201, `status ${uploaded.status}`);
-    recordingAssetId = uploadBody.audio?.assetId;
-    check("recording stored as an asset reference", typeof recordingAssetId === "string");
+    check("speaking interview state persisted", interview?.state === "PREPARING", interview?.state);
 
-    const asset = await prisma.audioAsset.findUnique({ where: { id: recordingAssetId } });
-    check("audio asset row has a storage key and no binary", Boolean(asset?.storageKey) && asset?.sizeBytes === wav.length);
+    // Upload one generated WAV per part. Preparation time is advanced in the
+    // database so the API still performs the authoritative timer validation.
+    const wav = makeWav(2);
+    for (let part = 1; part <= 3; part += 1) {
+      await prisma.speakingInterview.update({
+        where: { id: interview.id },
+        data: { stateStartedAt: new Date(Date.now() - 70_000) },
+      });
+
+      const transitioned = await api(`/api/speaking/interviews/${interview.id}/transition`, {
+        method: "POST",
+        body: { action: "BEGIN_PART" },
+      });
+      const transitionBody = await json(transitioned);
+      check(`speaking Part ${part} transition returns 200`, transitioned.status === 200, `status ${transitioned.status}`);
+      check(`speaking Part ${part} state is server-owned`, transitionBody.interview?.state === `PART_${part}`);
+
+      const duplicateTransition = await api(`/api/speaking/interviews/${interview.id}/transition`, {
+        method: "POST",
+        body: { action: "BEGIN_PART" },
+      });
+      check(`speaking Part ${part} duplicate transition is idempotent`, duplicateTransition.status === 200);
+
+      const recovered = await api(`/api/speaking/interviews/${interview.id}`);
+      const recoveryBody = await json(recovered);
+      check(`speaking Part ${part} refresh recovers state`, recoveryBody.interview?.state === `PART_${part}`);
+
+      const makeForm = () => {
+        const form = new FormData();
+        form.append("audio", new Blob([wav], { type: "audio/wav" }), `part-${part}.wav`);
+        form.append("durationSeconds", "2");
+        form.append("part", String(part));
+        return form;
+      };
+      const uploaded = await api(`/api/speaking/submissions/${speakingSubmissionId}/audio`, {
+        method: "POST",
+        form: makeForm(),
+      });
+      const uploadBody = await json(uploaded);
+      check(`speaking Part ${part} audio upload returns 201`, uploaded.status === 201, `status ${uploaded.status}`);
+      if (part === 1) recordingAssetId = uploadBody.audio?.assetId;
+      check(`speaking Part ${part} recording stored`, typeof uploadBody.audio?.assetId === "string");
+
+      const duplicateUpload = await api(`/api/speaking/submissions/${speakingSubmissionId}/audio`, {
+        method: "POST",
+        form: makeForm(),
+      });
+      const duplicateBody = await json(duplicateUpload);
+      check(`speaking Part ${part} duplicate upload is idempotent`, duplicateUpload.status === 201);
+      check(`speaking Part ${part} duplicate returns same asset`, duplicateBody.audio?.assetId === uploadBody.audio?.assetId);
+    }
+
+    const assets = await prisma.audioAsset.findMany({
+      where: { submissionId: speakingSubmissionId },
+      orderBy: { speakingPart: "asc" },
+    });
+    check("all three speaking recordings persisted", assets.length === 3);
+    check("speaking audio rows contain metadata, not binary", assets.every((asset) => Boolean(asset.storageKey) && asset.sizeBytes === wav.length));
+
+    const beforeEvaluation = await api(`/api/speaking/interviews/${interview.id}`);
+    const beforeEvaluationBody = await json(beforeEvaluation);
+    check("speaking reaches TRANSCRIBING after Part 3", beforeEvaluationBody.interview?.state === "TRANSCRIBING");
 
     const evaluated = await api(`/api/speaking/submissions/${speakingSubmissionId}/evaluate`, {
       method: "POST",
@@ -366,13 +436,13 @@ async function main() {
     const otherRegister = await api("/api/auth/register", {
       method: "POST",
       auth: false,
-      body: { name: "Intruder", phone: `+99891${testIdSuffix}`, password },
+      body: { name: "Intruder", phone: intruderPhone, password },
     });
     check("second user registers for the ownership check", otherRegister.status === 201);
     const otherLogin = await api("/api/auth/login", {
       method: "POST",
       auth: false,
-      body: { phone: `+99891${testIdSuffix}`, password },
+      body: { phone: intruderPhone, password },
     });
     check("second user logs in", otherLogin.status === 200);
 
@@ -451,6 +521,7 @@ async function main() {
     }
   }
 
+  await prisma.user.deleteMany({ where: { phone: { in: [emailPhone, intruderPhone] } } });
   await prisma.$disconnect();
 
   section("SUMMARY");
@@ -489,6 +560,7 @@ function makeWav(seconds) {
 main().catch(async (error) => {
   console.error("\nE2E smoke crashed:", error);
   try {
+    await prisma.user.deleteMany({ where: { phone: { in: [emailPhone, intruderPhone] } } });
     await prisma.$disconnect();
   } catch {
     /* ignore */

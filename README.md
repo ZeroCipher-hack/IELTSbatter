@@ -258,7 +258,7 @@ GET   /api/audio/[id]                         # stream a recording (owner only)
 npm test
 ```
 
-226 tests across 22 suites: grading schema validation, IELTS score rounding
+266 tests across 26 suites: grading schema validation, IELTS score rounding
 incl. .25/.75 boundaries, input validation, retry/backoff/fail-fast behaviour
 of the Gemini grader (injected transport — no network), invalid JSON / missing
 field / invalid band / unsupported category handling, secret redaction, debug
@@ -289,9 +289,10 @@ npm run e2e                    # terminal 2 (BASE_URL defaults to :3000)
 ```
 
 Walks the whole learner journey over HTTP — register → login → dashboard →
-writing → submit → result → reading → submit → result → listening → submit →
-result → speaking → upload → mock transcription → mock evaluation → result →
-dashboard → history — asserting the HTTP status, the stored database state and
+writing → idempotent retry → result → reading → submit → result → listening → submit →
+result → speaking Part 1/2/3 transitions → refresh recovery → duplicate upload →
+mock transcription → mock evaluation → result → dashboard → history — asserting
+the HTTP status, the stored database state and
 the rendered UI at every step. It also verifies anonymous access is rejected
 (401), another user's result/submission/recording is unreachable (404), late
 answer writes are refused (409), mock results are labelled MOCK, and no API key
@@ -309,6 +310,8 @@ npm start
 
 - Set all env vars from `.env.example` (strong `SESSION_SECRET`, real `DATABASE_URL`, `AI_MODE=gemini`).
 - Run `npx prisma migrate deploy` on release.
+- Run `npm run db:seed`, start the built server with `AI_MODE=mock`, then run
+  `npm run e2e` against a disposable staging database before promotion.
 - The in-memory rate limiter is per-instance; put Redis behind
   `src/lib/utils/rate-limit.ts` when scaling horizontally.
 - SMS (`SMS_MODE=live`) and payments (`PAYMENT_MODE=click|payme`) need real

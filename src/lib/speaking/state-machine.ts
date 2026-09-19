@@ -20,3 +20,14 @@ export function timerRemaining(startedAt: Date, durationSeconds: number, now: Da
   const elapsed = Math.max(0, Math.floor((now.getTime() - startedAt.getTime()) / 1000));
   return Math.max(0, durationSeconds - elapsed);
 }
+
+export function partTimerSeconds(
+  prompts: Array<{ part: number; preparationSeconds: number; speakingSeconds: number }>,
+  part: number,
+  phase: "PREPARING" | "SPEAKING"
+): number {
+  const inPart = prompts.filter((prompt) => prompt.part === part);
+  return phase === "PREPARING"
+    ? inPart.reduce((longest, prompt) => Math.max(longest, prompt.preparationSeconds), 0)
+    : inPart.reduce((total, prompt) => total + prompt.speakingSeconds, 0);
+}
