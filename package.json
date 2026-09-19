@@ -14,7 +14,9 @@
     "db:generate": "prisma generate",
     "db:generate:offline": "node scripts/prisma-generate.mjs",
     "postinstall": "node scripts/prisma-generate.mjs || true",
-    "calibrate": "tsx scripts/calibrate-writing.ts"
+    "calibrate": "tsx scripts/calibrate-writing.ts",
+    "db:seed": "tsx scripts/seed-tests.ts",
+    "e2e": "node --env-file=.env scripts/e2e-smoke.mjs"
   },
   "dependencies": {
     "@google/generative-ai": "^0.24.1",

@@ -46,6 +46,30 @@ enum PaymentStatus {
   CANCELLED
 }
 
+// ---------------------------------------------------------------- testing
+
+/** Extensible question kinds shared by Reading and Listening. */
+enum QuestionType {
+  MULTIPLE_CHOICE
+  TRUE_FALSE_NOT_GIVEN
+  YES_NO_NOT_GIVEN
+  MATCHING
+  SENTENCE_COMPLETION
+  SHORT_ANSWER
+}
+
+enum AttemptStatus {
+  IN_PROGRESS
+  SUBMITTED
+  GRADED
+  FAILED
+}
+
+enum AudioKind {
+  LISTENING_SECTION
+  SPEAKING_RECORDING
+}
+
 model User {
   id              String    @id @default(cuid())
   phone           String    @unique
@@ -59,8 +83,10 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  submissions Submission[]
-  payments    Payment[]
+  submissions  Submission[]
+  payments     Payment[]
+  testAttempts TestAttempt[]
+  audioAssets  AudioAsset[]
 }
 
 model SmsCode {
@@ -86,10 +112,12 @@ model Submission {
   status    SubmissionStatus @default(PENDING)
   createdAt DateTime         @default(now())
 
-  score         Score?
-  feedback      Feedback?
-  errors        EssayError[]
-  aiEvaluations AiEvaluation[]
+  score          Score?
+  feedback       Feedback?
+  errors         EssayError[]
+  aiEvaluations  AiEvaluation[]
+  speakingResult SpeakingResult?
+  recordings     AudioAsset[]
 
   @@index([userId, createdAt])
 }
@@ -176,4 +204,166 @@ model Payment {
   updatedAt  DateTime        @updatedAt
 
   @@index([userId])
+}
+
+// ================================================================
+// Shared test engine (Reading + Listening + Speaking prompts)
+// ================================================================
+
+/**
+ * A test paper. `module` distinguishes READING / LISTENING / SPEAKING so one
+ * engine and one authoring model serve every module.
+ */
+model Test {
+  id              String   @id @default(cuid())
+  module          Module
+  title           String
+  description     String?
+  durationMinutes Int      @default(60)
+  isPublished     Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sections TestSection[]
+  attempts TestAttempt[]
+
+  @@index([module, isPublished])
+}
+
+model TestSection {
+  id           String      @id @default(cuid())
+  testId       String
+  test         Test        @relation(fields: [testId], references: [id], onDelete: Cascade)
+  order        Int
+  title        String
+  instructions String?
+  /** Reading only: the passage body. */
+  passage      String?
+  /** Listening only: audio is referenced as a file, never stored as binary here. */
+  audioAssetId String?     @unique
+  audioAsset   AudioAsset? @relation("SectionAudio", fields: [audioAssetId], references: [id], onDelete: SetNull)
+
+  questions TestQuestion[]
+
+  @@index([testId, order])
+}
+
+model TestQuestion {
+  id          String      @id @default(cuid())
+  sectionId   String
+  section     TestSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  order       Int
+  /** Display number (for example 1..40). */
+  number      Int
+  type        QuestionType
+  prompt      String
+  /** Answer options for choice/matching questions: [{ value, label }]. */
+  options     Json?
+  /** Canonical accepted answers: { answers: string[] }. Never sent before grading. */
+  answer      Json
+  explanation String?
+  points      Int         @default(1)
+  /** Question-type specific extras (word limits, recording windows, ...). */
+  meta        Json?
+  /** Questions sharing one option list (matching groups) share a groupId. */
+  groupId     String?
+
+  answers TestAnswer[]
+
+  @@index([sectionId, order])
+}
+
+/**
+ * Audio lives in a file/object store; the database keeps only metadata and the
+ * storage URL so it never grows binary payloads.
+ */
+model AudioAsset {
+  id              String      @id @default(cuid())
+  kind            AudioKind
+  storageKey      String      @unique
+  url             String
+  mimeType        String
+  sizeBytes       Int?
+  durationSeconds Int?
+  /** Owner of user recordings (speaking); null for published test audio. */
+  userId          String?
+  user            User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  submissionId    String?
+  submission      Submission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  createdAt       DateTime    @default(now())
+
+  sections TestSection[] @relation("SectionAudio")
+
+  @@index([userId])
+  @@index([submissionId])
+}
+
+/** One user's attempt at a test. */
+model TestAttempt {
+  id               String        @id @default(cuid())
+  userId           String
+  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testId           String
+  test             Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
+  module           Module
+  status           AttemptStatus @default(IN_PROGRESS)
+  startedAt        DateTime      @default(now())
+  submittedAt      DateTime?
+  timeSpentSeconds Int?
+  rawScore         Int?
+  maxScore         Int?
+  band             Float?
+  createdAt        DateTime      @default(now())
+
+  answers TestAnswer[]
+
+  @@index([userId, createdAt])
+  @@index([testId])
+}
+
+model TestAnswer {
+  id            String       @id @default(cuid())
+  attemptId     String
+  attempt       TestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  questionId    String
+  question      TestQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  /** Raw learner response, shaped by the question type. */
+  response      Json
+  isCorrect     Boolean?
+  awardedPoints Int?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+}
+
+// ================================================================
+// Speaking (audio -> transcription -> AI evaluation)
+// ================================================================
+
+model SpeakingResult {
+  id                    String     @id @default(cuid())
+  submissionId          String     @unique
+  submission            Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  /** Transcript produced by the transcription provider (mock in development). */
+  transcript            String
+  transcriptionProvider String
+  transcriptionModel    String?
+  fluencyCoherence      Float
+  lexicalResource       Float
+  grammar               Float
+  pronunciation         Float
+  overall               Float
+  summary               String
+  strengths             String[]
+  weaknesses            String[]
+  improvements          String[]
+  aiProvider            String
+  aiModel               String
+  promptVersion         String
+  /** True when the evaluation came from MockSpeakingGrader, never a real model. */
+  isMock                Boolean    @default(true)
+  rawResponse           String?
+  createdAt             DateTime   @default(now())
 }

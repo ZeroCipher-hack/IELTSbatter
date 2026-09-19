@@ -23,12 +23,22 @@ export async function Header() {
               >
                 {t("dashboard")}
               </Link>
-              <Link
-                href="/writing"
-                className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
-              >
-                {t("writing")}
-              </Link>
+              {(
+                [
+                  ["writing", "/writing"],
+                  ["reading", "/reading"],
+                  ["listening", "/listening"],
+                  ["speaking", "/speaking"],
+                ] as const
+              ).map(([label, href]) => (
+                <Link
+                  key={href}
+                  href={href}
+                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                >
+                  {t(label)}
+                </Link>
+              ))}
               <LanguageSwitcher />
               <LogoutButton label={t("logout")} />
             </>

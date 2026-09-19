@@ -73,6 +73,22 @@ export const env = {
   get paymentMode(): string {
     return process.env.PAYMENT_MODE ?? "mock";
   },
+  /**
+   * Optional JSON override for the raw-score -> band tables used by Reading and
+   * Listening, e.g. {"READING":[{"min":30,"band":7}]} (raw out of 40).
+   * A malformed value is ignored so grading can never break on config.
+   */
+  get bandTableOverride(): string | null {
+    return process.env.BAND_TABLE_OVERRIDE || null;
+  },
+  /** Upper bound for a single speaking recording, in seconds. */
+  get speakingMaxRecordingSeconds(): number {
+    return positiveInt(process.env.SPEAKING_MAX_RECORDING_SECONDS, 300);
+  },
+  /** Upper bound for an uploaded recording, in megabytes. */
+  get speakingMaxUploadMb(): number {
+    return positiveInt(process.env.SPEAKING_MAX_UPLOAD_MB, 25);
+  },
   get writingMinWords(): number {
     return Number(process.env.WRITING_MIN_WORDS ?? 250);
   },

@@ -1,8 +1,8 @@
-# AXI — AI-powered IELTS Writing Assessment Platform
+# AXI — IELTS assessment platform
 
-AXI is a web platform for IELTS candidates in Uzbekistan. Users write an IELTS
-Writing Task 2 essay, and AI grades it against the official IELTS Writing Band
-Descriptors:
+AXI is a web platform for IELTS candidates in Uzbekistan covering all four
+skills. The **Writing** module grades an essay with an AI provider against the
+official IELTS Writing Band Descriptors:
 
 - **Task Response**
 - **Coherence & Cohesion**
@@ -13,9 +13,45 @@ The platform returns per-criterion band scores, a server-computed overall band
 (official IELTS rounding), concrete error corrections, detailed feedback, and
 tracks progress over time.
 
-**Current scope:** the Writing module is fully implemented end to end.
-Reading, Listening and Speaking are architectural placeholders (see the
-`Module` enum in the Prisma schema).
+**Reading** and **Listening** are graded deterministically against answer keys
+stored in the database — no AI is involved anywhere in their scoring. They
+share one engine (`src/lib/testing/`) and one set of UI components:
+
+- test catalog, passage/audio stimulus, six extensible question types
+  (multiple choice, true/false/not given, yes/no/not given, matching, sentence
+  completion, short answer);
+- countdown timer derived from the attempt's server-side start time, question
+  navigator, progress indicator;
+- autosave (so a refresh never loses answers), server-side submit, raw score,
+  configurable raw→band conversion;
+- result page with section breakdown, per-question-type analysis, strengths /
+  weaknesses / recommendations (all derived from the stored outcome) and a
+  mistake review showing the learner's answer, the correct answer and the
+  explanation when the author provided one.
+
+The **Listening** audio is served from a URL (`public/audio/…` in development,
+object storage in production) — audio is never stored as binary in the
+database.
+
+**Speaking** implements the full IELTS structure (Parts 1–3) with preparation
+and speaking timers, browser microphone recording, playback/re-record, upload
+and an evaluation pipeline:
+
+```
+audio → transcription provider → transcript → speaking grader → structured JSON
+      → database → result page
+```
+
+Both halves of the pipeline live behind `src/lib/ai/speaking/` (factory only;
+`GeminiTranscriptionProvider`/`GeminiSpeakingGrader` for real use,
+`MockTranscriptionProvider`/`MockSpeakingGrader` for development and tests).
+Mock output is flagged `isMock` and is clearly labelled **MOCK** in the UI — it
+is never presented as a real AI evaluation. The overall speaking band is
+recomputed on the server from the four criteria.
+
+The dashboard shows Writing, Reading, Listening and Speaking with the latest
+band, the previous band, progress, attempt count and history — all read from
+the database.
 
 ---
 
@@ -65,7 +101,18 @@ src/
 │   ├── db/                         # Prisma client singleton
 │   ├── auth/                       # session (JWT), password (bcrypt), sms
 │   ├── payments/                   # Click/Payme abstraction (mock mode)
-│   ├── writing/                    # grading pipeline service
+│   ├── writing/                    # writing grading pipeline service
+│   ├── testing/                    # shared Reading/Listening engine
+│   │   ├── types.ts                # question types, public (key-stripped) test
+│   │   ├── scoring.ts              # answer normalisation + scoring
+│   │   ├── band-conversion.ts      # raw → band tables (env-overridable)
+│   │   ├── feedback.ts             # deterministic strengths/weaknesses
+│   │   └── service.ts              # catalog, attempts, grading, progress
+│   ├── speaking/                   # speaking pipeline service
+│   │   ├── types.ts                # client-safe speaking types
+│   │   └── service.ts              # submissions, uploads, evaluation
+│   ├── ai/speaking/                # speaking AI providers (factory + providers)
+│   ├── storage/                    # public/private file storage abstraction
 │   ├── utils/                      # scoring, rate limit, api helpers
 │   └── validations/                # Zod input schemas
 ├── i18n.ts                         # next-intl config (cookie-based locale)
@@ -77,6 +124,8 @@ scripts/
 ├── apply-migrations.mjs            # offline migration runner
 ├── prisma-generate.mjs             # offline-safe prisma generate
 ├── calibrate-writing.ts            # grader calibration CLI
+├── seed-tests.ts                   # demo Reading/Listening/Speaking tests
+├── e2e-smoke.mjs                   # full-journey E2E smoke test
 └── calibration/essays.json         # synthetic calibration set
 tests/                              # vitest suites
 ```
@@ -113,6 +162,9 @@ cp .env.example .env       # then edit values
 | `NEXT_PUBLIC_APP_URL`       | Public app URL                                         |
 | `WRITING_MIN_WORDS`         | Recommended minimum words (default 250)                |
 | `WRITING_ENFORCE_MIN_WORDS` | `true` to reject essays under the minimum              |
+| `BAND_TABLE_OVERRIDE`       | Optional JSON raw(40)→band tables for Reading/Listening|
+| `SPEAKING_MAX_RECORDING_SECONDS` | Hard cap per speaking recording (default 300)     |
+| `SPEAKING_MAX_UPLOAD_MB`    | Max upload size per recording (default 25)             |
 
 ### Database
 
@@ -160,13 +212,53 @@ npm run db:dev     # terminal 1 (if using bundled DB)
 npm run dev        # terminal 2 → http://localhost:3000
 ```
 
+### Demo data (Reading / Listening / Speaking)
+
+```bash
+npm run db:seed     # idempotent: creates the demo tests and sample audio
+```
+
+Creates one published test per objective/speaking module, including a generated
+4-second placeholder WAV per listening section (documented as a placeholder,
+not real exam audio) and a two-passage reading test covering every question
+type. The seed is safe to re-run and deletes listening audio that no longer
+belongs to a section.
+
+## Modules and routes
+
+| Module    | Runner                       | Result                        | Scoring |
+| --------- | ---------------------------- | ----------------------------- | ------- |
+| Writing   | `/writing`                   | `/writing/result/[id]`        | AI provider (server-side) |
+| Reading   | `/reading/[testId]`          | `/reading/result/[attemptId]` | stored answer key, no AI |
+| Listening | `/listening/[testId]`        | `/listening/result/[attemptId]` | stored answer key, no AI |
+| Speaking  | `/speaking/[testId]`         | `/speaking/result/[submissionId]` | AI provider (transcript), mock in dev |
+
+API surface (all require a session; ids are always owner-scoped):
+
+```text
+GET   /api/tests/[module]                     # published catalog (reading|listening)
+GET   /api/tests/[module]/[testId]            # learner-safe test (answers stripped)
+POST  /api/attempts                           # start an attempt
+GET   /api/attempts                           # reading + listening progress
+GET   /api/attempts/[id]                      # in-progress state of own attempt
+PATCH /api/attempts/[id]                      # autosave answers
+POST  /api/attempts/[id]/submit               # grade server-side
+GET   /api/attempts/[id]/result               # result + review (owner only)
+GET   /api/speaking/tests[?testId]            # speaking catalog / one test
+POST  /api/speaking/submissions               # start a speaking attempt
+GET   /api/speaking/submissions/[id]          # status + own result
+POST  /api/speaking/submissions/[id]/audio    # upload the recording
+POST  /api/speaking/submissions/[id]/evaluate # transcribe + evaluate
+GET   /api/audio/[id]                         # stream a recording (owner only)
+```
+
 ## Tests
 
 ```bash
 npm test
 ```
 
-145 tests across 16 suites: grading schema validation, IELTS score rounding
+226 tests across 22 suites: grading schema validation, IELTS score rounding
 incl. .25/.75 boundaries, input validation, retry/backoff/fail-fast behaviour
 of the Gemini grader (injected transport — no network), invalid JSON / missing
 field / invalid band / unsupported category handling, secret redaction, debug
@@ -175,8 +267,36 @@ prompt-version & token-usage persistence, warning calculation/persistence,
 provider factory configuration, the calibration report contract (MAD, bias,
 exact matches, latency, retries, validation statuses), static security guards
 (no client-side provider imports, no hardcoded keys, no raw SQL, `.env` ignored),
-and authorization (users cannot read others' submissions). Tests never call the
-real Gemini API.
+and authorization (users cannot read others' submissions).
+
+Module coverage added with the Reading/Listening/Speaking work: the scoring and
+band-conversion engine (all six question types, normalisation, /40 scaling,
+custom band tables), the attempt lifecycle against a real database (autosave,
+grading, immutability after submit, resume/abandon, ownership), the speaking
+pipeline (private storage, mock transcription, mock evaluation, failure paths,
+ownership), the speaking AI layer (schema, retry/backoff, fail-fast on 401,
+no-key-leak assertions, factory fallback) and static guards for the new routes
+(answer keys never leave the server, audio ownership checks, no storage keys in
+responses, no secrets outside `lib/env.ts`).
+
+Tests never call the real Gemini API.
+
+## End-to-end smoke test
+
+```bash
+npm run build && npm start     # terminal 1
+npm run e2e                    # terminal 2 (BASE_URL defaults to :3000)
+```
+
+Walks the whole learner journey over HTTP — register → login → dashboard →
+writing → submit → result → reading → submit → result → listening → submit →
+result → speaking → upload → mock transcription → mock evaluation → result →
+dashboard → history — asserting the HTTP status, the stored database state and
+the rendered UI at every step. It also verifies anonymous access is rejected
+(401), another user's result/submission/recording is unreachable (404), late
+answer writes are refused (409), mock results are labelled MOCK, and no API key
+or env secret appears in any response. With `AI_MODE=mock` no external AI
+provider is contacted.
 
 ## Production build
 
@@ -193,6 +313,13 @@ npm start
   `src/lib/utils/rate-limit.ts` when scaling horizontally.
 - SMS (`SMS_MODE=live`) and payments (`PAYMENT_MODE=click|payme`) need real
   provider implementations in `src/lib/auth/sms.ts` and `src/lib/payments/`.
+- Speaking recordings are written to `var/uploads/` (git-ignored) by the default
+  storage provider; swap `src/lib/storage/index.ts` for S3-style storage without
+  touching the services. Published listening audio lives under `public/audio/`
+  and is regenerated by `npm run db:seed`.
+- Set `AI_MODE=gemini` (with `GEMINI_API_KEY` in the environment) to switch the
+  Writing and Speaking pipelines from the mock providers to Gemini. Until then
+  every AI-produced result is labelled MOCK in the UI.
 
 ---
 

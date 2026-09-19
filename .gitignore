@@ -37,3 +37,10 @@ next-env.d.ts
 
 # env files
 .env
+
+# local audio/upload storage (never commit user recordings)
+/var/uploads/
+!var/uploads/.gitkeep
+
+# generated development audio (recreated by `npm run db:seed`)
+/public/audio/

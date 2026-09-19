@@ -24,9 +24,14 @@ const read = (file: string) => fs.readFileSync(file, "utf8");
 const rel = (file: string) => path.relative(ROOT, file);
 
 describe("AI provider isolation", () => {
-  it("imports the Gemini SDK only from lib/ai/gemini.ts", () => {
+  it("imports the Gemini SDK only from the two provider files", () => {
     const importers = sourceFiles.filter((f) => read(f).includes("@google/generative-ai"));
-    expect(importers.map(rel)).toEqual(["src/lib/ai/gemini.ts"]);
+    // One file per pipeline half: writing grading and speaking (transcription +
+    // evaluation). Nothing else in the app may touch the SDK.
+    expect(importers.map(rel).sort()).toEqual([
+      "src/lib/ai/gemini.ts",
+      "src/lib/ai/speaking/gemini.ts",
+    ]);
   });
 
   it("never imports lib/ai from a client component", () => {
@@ -40,7 +45,9 @@ describe("AI provider isolation", () => {
     // Scripts (calibration tooling) may import providers directly; app code may not.
     const wrongDoor = sourceFiles
       .filter((f) => !f.includes(`${path.sep}lib${path.sep}ai${path.sep}`))
-      .filter((f) => /from\s+"@\/lib\/ai\/(gemini|mock|prompts)"/.test(read(f)));
+      .filter((f) =>
+        /from\s+"@\/lib\/ai\/(gemini|mock|prompts|speaking\/(gemini|mock))"/.test(read(f))
+      );
 
     expect(wrongDoor.map(rel)).toEqual([]);
 
@@ -48,6 +55,21 @@ describe("AI provider isolation", () => {
     const factory = path.join(SRC, "lib", "ai", "grading.ts");
     expect(read(factory)).toContain("new GeminiGrader()");
     expect(read(factory)).toContain("env.aiMode");
+
+    // Same rule for the speaking pipeline.
+    const speakingFactory = path.join(SRC, "lib", "ai", "speaking", "index.ts");
+    expect(read(speakingFactory)).toContain("new GeminiSpeakingGrader()");
+    expect(read(speakingFactory)).toContain("new GeminiTranscriptionProvider()");
+    expect(read(speakingFactory)).toContain("env.aiMode");
+  });
+
+  it("resolves the speaking providers inside the pipeline try block (misconfig must not crash a request)", () => {
+    const service = read(path.join(SRC, "lib", "speaking", "service.ts"));
+    const tryIndex = service.indexOf("try {");
+    expect(tryIndex).toBeGreaterThan(-1);
+    // Both factory calls must appear after the try starts.
+    expect(service.indexOf("getTranscriptionProvider()")).toBeGreaterThan(tryIndex);
+    expect(service.indexOf("getSpeakingGrader()")).toBeGreaterThan(tryIndex);
   });
 });
 

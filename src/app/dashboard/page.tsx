@@ -5,20 +5,94 @@ import { Header } from "@/components/layout/Header";
 import { Card } from "@/components/ui/Card";
 import { BandBadge } from "@/components/ui/BandBadge";
 import { ProgressChart } from "@/components/dashboard/ProgressChart";
+import {
+  ModuleOverview,
+  computeDashboardOverall,
+  type ModuleOverviewItem,
+} from "@/components/dashboard/ModuleOverview";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { getProgressStats, listOwnSubmissions } from "@/lib/writing/service";
+import { getModuleProgress } from "@/lib/testing/service";
+import { getSpeakingProgress } from "@/lib/speaking/service";
 
 export default async function DashboardPage() {
   const session = await getSession();
   if (!session) redirect("/login");
 
   const t = await getTranslations("dashboard");
-  const [user, stats, submissions] = await Promise.all([
+  const [user, stats, submissions, reading, listening, speaking] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.userId }, select: { name: true } }),
     getProgressStats(session.userId),
     listOwnSubmissions(session.userId),
+    getModuleProgress(session.userId, "READING"),
+    getModuleProgress(session.userId, "LISTENING"),
+    getSpeakingProgress(session.userId),
   ]);
+
+  // Writing bands come from the same history the chart uses (DB only).
+  const writingBands = stats.history.map((entry) => entry.overall);
+  const writingLatest = writingBands.length ? writingBands[writingBands.length - 1] : null;
+  const writingPrevious = writingBands.length > 1 ? writingBands[writingBands.length - 2] : null;
+  const latestWritingResult = [...submissions]
+    .reverse()
+    .find((s) => s.status === "COMPLETED" && s.score)?.id;
+
+  const overviewItems: ModuleOverviewItem[] = [
+    {
+      module: "WRITING",
+      href: "/writing",
+      latestBand: writingLatest,
+      previousBand: writingPrevious,
+      bestBand: writingBands.length ? Math.max(...writingBands) : null,
+      attempts: stats.essaysSubmitted,
+      latestResultHref: latestWritingResult ? `/writing/result/${latestWritingResult}` : null,
+    },
+    {
+      module: "READING",
+      href: "/reading",
+      latestBand: reading.latestBand,
+      previousBand: reading.previousBand,
+      bestBand: reading.bestBand,
+      attempts: reading.attempts,
+      latestResultHref: reading.history.length
+        ? `/reading/result/${reading.history[reading.history.length - 1].attemptId}`
+        : null,
+    },
+    {
+      module: "LISTENING",
+      href: "/listening",
+      latestBand: listening.latestBand,
+      previousBand: listening.previousBand,
+      bestBand: listening.bestBand,
+      attempts: listening.attempts,
+      latestResultHref: listening.history.length
+        ? `/listening/result/${listening.history[listening.history.length - 1].attemptId}`
+        : null,
+    },
+    {
+      module: "SPEAKING",
+      href: "/speaking",
+      latestBand: speaking.latestBand,
+      previousBand: speaking.previousBand,
+      bestBand: speaking.bestBand,
+      attempts: speaking.attempts,
+      latestResultHref: speaking.history
+        .slice()
+        .reverse()
+        .find((item) => item.status === "COMPLETED")?.submissionId
+        ? `/speaking/result/${
+            speaking.history
+              .slice()
+              .reverse()
+              .find((item) => item.status === "COMPLETED")!.submissionId
+          }`
+        : null,
+      isMock: speaking.isMock,
+    },
+  ];
+
+  const overallBand = computeDashboardOverall(overviewItems);
 
   const averages: Array<[string, number]> = [
     [t("taskResponse"), stats.averageTaskResponse],
@@ -47,6 +121,9 @@ export default async function DashboardPage() {
             {t("writeEssay")}
           </Link>
         </div>
+
+        {/* All modules: latest / previous / progress / attempts, from the DB */}
+        <ModuleOverview items={overviewItems} overallBand={overallBand} />
 
         {/* Stat cards */}
         <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
