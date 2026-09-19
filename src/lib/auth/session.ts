@@ -1,4 +1,6 @@
-import { SignJWT, jwtVerify } from "jose";
+// Narrow imports: JWT sign/verify only (no JWE/compression in the bundle).
+import { SignJWT } from "jose/jwt/sign";
+import { jwtVerify } from "jose/jwt/verify";
 import { cookies } from "next/headers";
 import { env } from "@/lib/env";
 

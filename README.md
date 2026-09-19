@@ -166,15 +166,17 @@ npm run dev        # terminal 2 → http://localhost:3000
 npm test
 ```
 
-139 tests across 15 suites: grading schema validation, IELTS score rounding
+145 tests across 16 suites: grading schema validation, IELTS score rounding
 incl. .25/.75 boundaries, input validation, retry/backoff/fail-fast behaviour
 of the Gemini grader (injected transport — no network), invalid JSON / missing
 field / invalid band / unsupported category handling, secret redaction, debug
 gating, prompt version registry, calibration fixtures, submission creation,
 prompt-version & token-usage persistence, warning calculation/persistence,
-provider factory configuration, static security guards (no client-side provider
-imports, no hardcoded keys, no raw SQL, `.env` ignored), and authorization
-(users cannot read others' submissions). Tests never call the real Gemini API.
+provider factory configuration, the calibration report contract (MAD, bias,
+exact matches, latency, retries, validation statuses), static security guards
+(no client-side provider imports, no hardcoded keys, no raw SQL, `.env` ignored),
+and authorization (users cannot read others' submissions). Tests never call the
+real Gemini API.
 
 ## Production build
 
@@ -201,13 +203,21 @@ against human reference bands — this is how prompt V2 was validated and how V1
 vs V2 will be compared on the same essays.
 
 ```bash
-npm run calibrate                        # whole set, active AI_PROMPT_VERSION
-npm run calibrate -- --compare           # V1 and V2 side by side, same essays
+# Real calibration (requires AI_MODE=gemini + GEMINI_API_KEY):
+npm run calibrate -- --compare --out report.json   # V1 and V2 over the same essays
 npm run calibrate -- --prompt V1
+npm run calibrate -- --prompt V2
 npm run calibrate -- --id strong --id weak
 npm run calibrate -- --locale uz --delay 2000
-npm run calibrate -- --out calibration-report.json
+
+# Pipeline smoke test without a key (mock grades — NOT a calibration):
+npm run calibrate -- --allow-mock
 ```
+
+Without a configured Gemini key the script **aborts with exit code 2** instead of
+producing numbers that look real. Mock runs must be requested explicitly with
+`--allow-mock` and are banner-flagged in the console and in the JSON report
+(`"mock": true`, `"warning": ...`).
 
 Output per essay:
 
@@ -228,10 +238,18 @@ meta: provider=gemini model=gemini-1.5-flash prompt=WRITING_GRADING_PROMPT_V2
       latency=8123ms attempts=1 retries=0 validation=VALID tokens=1620/498
 ```
 
-plus a per-criterion accuracy table (mean absolute difference, exact matches and
-signed bias — positive bias means the model scored above the reference), a
-summary table with the overall numbers, and with `--compare` a V1-vs-V2 table
-over the same essays including which prompt landed closer per essay.
+Each essay block prints Expected / AI / **Abs diff** for all four criteria and
+the overall band, plus provider, model, prompt version, latency, attempts,
+retries, validation status and token usage.
+
+The report file (`--out`) additionally contains, per prompt version:
+`summary` with overall MAD, mean signed bias, exact-match count, mean latency,
+total retries, failed runs, validation-status counts and a per-criterion
+`criteria[]` breakdown, plus every run with `expected`, `actual`, `absDiff`,
+`signedDiff` and `meta`. Console output adds a per-criterion accuracy table
+(mean absolute difference, exact matches, signed bias — positive bias means the
+model scored above the reference) and, with `--compare`, a V1-vs-V2 table over
+the same essays including which prompt landed closer per essay.
 
 The utility reuses the production prompt builders, Zod schema and scoring code,
 so what you measure is exactly what users get. It never touches the database.

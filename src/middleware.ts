@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { jwtVerify } from "jose";
+// Narrow import: the JWT-verify path only (keeps JWE/compression out of
+// the Edge Runtime bundle).
+import { jwtVerify } from "jose/jwt/verify";
 
 const PROTECTED_PREFIXES = ["/dashboard", "/writing"];
 const AUTH_PAGES = ["/login", "/register"];

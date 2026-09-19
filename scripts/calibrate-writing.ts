@@ -48,6 +48,7 @@ interface CliArgs {
   file: string;
   prompt: WritingPromptVersion;
   compare: boolean;
+  allowMock: boolean;
   locale: string;
   model?: string;
   out?: string;
@@ -60,6 +61,7 @@ function parseArgs(argv: string[]): CliArgs {
     file: path.join("scripts", "calibration", "essays.json"),
     prompt: promptVersionFromLabel(process.env.AI_PROMPT_VERSION ?? "V2"),
     compare: false,
+    allowMock: false,
     locale: "en",
     delayMs: 1500,
   };
@@ -79,6 +81,9 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case "--compare":
         args.compare = true;
+        break;
+      case "--allow-mock":
+        args.allowMock = true;
         break;
       case "--locale":
         args.locale = next();
@@ -111,6 +116,7 @@ Options:
   --file <path>         fixture file (default: scripts/calibration/essays.json)
   --prompt <V1|V2>      prompt version to test (default: AI_PROMPT_VERSION or V2)
   --compare             run BOTH V1 and V2 over the same essays (2x API calls)
+  --allow-mock          run the MockGrader on purpose (NOT a real calibration)
   --locale <uz|ru|en>   feedback language sent to the model (default: en)
   --model <name>        override GEMINI_MODEL for this run
   --delay <ms>          pause between essays to respect API rate limits (default: 1500)
@@ -187,7 +193,7 @@ interface RunMeta {
   warnings: string[];
 }
 
-interface RunResult {
+export interface RunResult {
   id: string;
   label?: string;
   words: number;
@@ -195,6 +201,10 @@ interface RunResult {
   expected?: CriterionScores;
   expectedOverall?: number;
   actual?: CriterionScores & { overall: number };
+  /** Absolute |AI - expected| per criterion (undefined without a reference). */
+  absDiff?: Record<keyof CriterionScores | "overall", number | null>;
+  /** Signed AI - expected per criterion (positive = model scored higher). */
+  signedDiff?: Record<keyof CriterionScores | "overall", number | null>;
   meta?: RunMeta;
   error?: string;
 }
@@ -220,16 +230,40 @@ async function runOne(
       essay: fixture.essay,
       feedbackLocale: locale,
     });
+    const actual: CriterionScores & { overall: number } = {
+      taskResponse: result.data.scores.taskResponse.band,
+      coherenceCohesion: result.data.scores.coherenceCohesion.band,
+      lexicalResource: result.data.scores.lexicalResource.band,
+      grammar: result.data.scores.grammar.band,
+      overall: result.overall,
+    };
+
+    const expectedValues: Array<keyof CriterionScores | "overall"> = [
+      "taskResponse",
+      "coherenceCohesion",
+      "lexicalResource",
+      "grammar",
+      "overall",
+    ];
+    const absDiff = {} as Record<keyof CriterionScores | "overall", number | null>;
+    const signedDiff = {} as Record<keyof CriterionScores | "overall", number | null>;
+    for (const key of expectedValues) {
+      const expected = key === "overall" ? base.expectedOverall : base.expected?.[key];
+      if (expected == null) {
+        absDiff[key] = null;
+        signedDiff[key] = null;
+        continue;
+      }
+      absDiff[key] = Number(Math.abs(actual[key] - expected).toFixed(2));
+      signedDiff[key] = Number((actual[key] - expected).toFixed(2));
+    }
+
     return {
       ...base,
       ok: true,
-      actual: {
-        taskResponse: result.data.scores.taskResponse.band,
-        coherenceCohesion: result.data.scores.coherenceCohesion.band,
-        lexicalResource: result.data.scores.lexicalResource.band,
-        grammar: result.data.scores.grammar.band,
-        overall: result.overall,
-      },
+      actual,
+      absDiff,
+      signedDiff,
       meta: {
         provider: result.meta.provider,
         model: result.meta.model,
@@ -294,16 +328,19 @@ function printComparison(result: RunResult): void {
   for (const { key, title } of CRITERIA) {
     const expected = result.expected?.[key];
     const actual = result.actual[key];
+    const abs = result.absDiff?.[key];
     console.log("");
     console.log(title);
     console.log(`Expected: ${band(expected)}`);
     console.log(`AI:       ${band(actual)}${delta(actual, expected)}`);
+    console.log(`Abs diff: ${abs == null ? "n/a" : abs.toFixed(1)}`);
   }
 
   console.log("");
   console.log("Overall");
   console.log(`Expected: ${band(result.expectedOverall)}`);
   console.log(`AI:       ${band(result.actual.overall)}${delta(result.actual.overall, result.expectedOverall)}`);
+  console.log(`Abs diff: ${result.absDiff?.overall == null ? "n/a" : result.absDiff.overall.toFixed(1)}`);
 
   if (result.meta) {
     console.log("");
@@ -321,7 +358,57 @@ function printComparison(result: RunResult): void {
   }
 }
 
-interface Accuracy {
+export interface PromptSummary {
+  promptVersion: string;
+  model: string | null;
+  mock: boolean;
+  n: number;
+  overallMeanAbsDiff: number | null;
+  overallMeanSignedBias: number | null;
+  overallExact: number;
+  meanLatencyMs: number | null;
+  totalRetries: number;
+  failedRuns: number;
+  validationStatuses: Record<string, number>;
+  criteria: Array<{ criterion: string; meanAbsDiff: number | null; meanSignedBias: number | null; exact: number; n: number }>;
+}
+
+export function summarize(promptVersion: string, results: RunResult[], mock: boolean): PromptSummary {
+  const accuracy = accuracyFor(results);
+  const overall = accuracy.find((a) => a.key === "Overall");
+  const withMeta = results.filter((r) => r.meta);
+  // Only validation statuses are counted here; failures have their own field.
+  const statuses: Record<string, number> = {};
+  for (const r of results) {
+    const status = r.meta?.validationStatus ?? (r.ok ? "VALID" : "UNKNOWN");
+    statuses[status] = (statuses[status] ?? 0) + 1;
+  }
+
+  return {
+    promptVersion,
+    model: withMeta[0]?.meta?.model ?? null,
+    mock,
+    n: overall?.n ?? 0,
+    overallMeanAbsDiff: overall && !Number.isNaN(overall.meanAbsDiff) ? Number(overall.meanAbsDiff.toFixed(3)) : null,
+    overallMeanSignedBias: overall && !Number.isNaN(overall.bias) ? Number(overall.bias.toFixed(3)) : null,
+    overallExact: overall?.exact ?? 0,
+    meanLatencyMs: withMeta.length
+      ? Math.round(withMeta.reduce((sum, r) => sum + r.meta!.latencyMs, 0) / withMeta.length)
+      : null,
+    totalRetries: withMeta.reduce((sum, r) => sum + r.meta!.retryCount, 0),
+    failedRuns: results.filter((r) => !r.ok).length,
+    validationStatuses: statuses,
+    criteria: accuracy.map((a) => ({
+      criterion: a.key,
+      meanAbsDiff: Number.isNaN(a.meanAbsDiff) ? null : Number(a.meanAbsDiff.toFixed(3)),
+      meanSignedBias: Number.isNaN(a.bias) ? null : Number(a.bias.toFixed(3)),
+      exact: a.exact,
+      n: a.n,
+    })),
+  };
+}
+
+export interface Accuracy {
   key: string;
   meanAbsDiff: number;
   exact: number;
@@ -330,7 +417,7 @@ interface Accuracy {
 }
 
 /** Mean absolute difference / exact matches / signed bias per criterion. */
-function accuracyFor(results: RunResult[]): Accuracy[] {
+export function accuracyFor(results: RunResult[]): Accuracy[] {
   const scored = results.filter((r) => r.ok && r.actual && r.expected);
   const n = scored.length;
 
@@ -435,18 +522,17 @@ function printPromptComparison(v1: RunResult[], v2: RunResult[]): void {
     ["V1", v1],
     ["V2", v2],
   ] as const) {
-    const scored = results.filter((r) => r.ok && r.actual && r.expectedOverall != null);
-    if (!scored.length) continue;
-    const mad =
-      scored.reduce((s, r) => s + Math.abs(r.actual!.overall - r.expectedOverall!), 0) / scored.length;
-    const exact = scored.filter((r) => r.actual!.overall === r.expectedOverall).length;
-    const latencies = results.filter((r) => r.meta).map((r) => r.meta!.latencyMs);
-    const meanLatency = latencies.length
-      ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
-      : null;
+    const summary = summarize(label, results, false);
+    if (!summary.n) {
+      console.log(`${label}: no scored runs (${summary.failedRuns} failed)`);
+      continue;
+    }
     console.log(
-      `${label}: meanAbsDiff=${mad.toFixed(2)} band, exact=${exact}/${scored.length}` +
-        (meanLatency != null ? `, meanLatency=${meanLatency}ms` : "")
+      `${label}: MAD=${summary.overallMeanAbsDiff?.toFixed(2)} band, ` +
+        `bias=${summary.overallMeanSignedBias && summary.overallMeanSignedBias > 0 ? "+" : ""}` +
+        `${summary.overallMeanSignedBias?.toFixed(2)}, ` +
+        `exact=${summary.overallExact}/${summary.n}, meanLatency=${summary.meanLatencyMs}ms, ` +
+        `retries=${summary.totalRetries}, failed=${summary.failedRuns}`
     );
   }
   console.log(
@@ -471,7 +557,35 @@ async function main(): Promise<void> {
     process.exit(2);
   }
 
-  const useMock = (process.env.AI_MODE ?? (process.env.GEMINI_API_KEY ? "gemini" : "mock")) !== "gemini";
+  // Calibration is meaningless against the MockGrader, so real Gemini is the
+  // default requirement. Mock output must be requested explicitly and is
+  // clearly marked in both the console and the JSON report.
+  const aiMode = process.env.AI_MODE ?? (process.env.GEMINI_API_KEY ? "gemini" : "mock");
+  const useMock = aiMode !== "gemini";
+
+  if (useMock && !args.allowMock) {
+    console.error(
+      "\nCALIBRATION ABORTED — real Gemini is not configured.\n" +
+        `  AI_MODE            = ${process.env.AI_MODE ?? "(unset)"}\n` +
+        `  GEMINI_API_KEY     = ${process.env.GEMINI_API_KEY ? "set" : "MISSING"}\n` +
+        `  GEMINI_MODEL       = ${process.env.GEMINI_MODEL ?? "(unset)"}\n\n` +
+        "  Set AI_MODE=gemini, GEMINI_API_KEY and GEMINI_MODEL in .env, then re-run:\n" +
+        "    npm run calibrate -- --compare --out report.json\n\n" +
+        "  To exercise the pipeline without a key (mock grades, NOT a real\n" +
+        "  calibration — numbers say nothing about Gemini quality):\n" +
+        "    npm run calibrate -- --allow-mock\n"
+    );
+    process.exit(2);
+  }
+
+  if (aiMode === "gemini" && !process.env.GEMINI_API_KEY) {
+    console.error(
+      "\nCALIBRATION ABORTED — AI_MODE=gemini but GEMINI_API_KEY is empty.\n" +
+        "  Add the key to .env (never commit it) and re-run.\n"
+    );
+    process.exit(2);
+  }
+
   const promptsToRun: WritingPromptVersion[] = args.compare
     ? ["WRITING_GRADING_PROMPT_V1", "WRITING_GRADING_PROMPT_V2"]
     : [args.prompt];
@@ -482,16 +596,15 @@ async function main(): Promise<void> {
   console.log(`  prompt(s)     : ${promptsToRun.join(", ")}${args.compare ? " (compare mode — 2x calls)" : ""}`);
   console.log(`  feedback lang : ${args.locale}`);
   console.log(`  provider      : ${useMock ? "mock" : "gemini"}`);
+  console.log(`  model         : ${useMock ? "mock-grader-1" : (args.model ?? process.env.GEMINI_MODEL ?? "?")}`);
 
   if (useMock) {
     console.log(
-      "\n  NOTE: AI_MODE is not \"gemini\" (or GEMINI_API_KEY is missing) — running the\n" +
-        "        deterministic MockGrader. Set AI_MODE=gemini and GEMINI_API_KEY in .env\n" +
-        "        to calibrate against the real model."
+      "\n  " + "!".repeat(66) + "\n" +
+        "  WARNING: MockGrader in use (--allow-mock). These numbers describe the\n" +
+        "  deterministic mock, NOT Gemini. Do not treat them as calibration data.\n" +
+        "  " + "!".repeat(66)
     );
-  }
-  if (process.env.GEMINI_API_KEY && useMock) {
-    console.log("  NOTE: a GEMINI_API_KEY exists but AI_MODE is not set to gemini.");
   }
 
   const promptChars = buildWritingGradingPromptForVersion(promptsToRun[0], {
@@ -545,17 +658,15 @@ async function main(): Promise<void> {
         .flat()
         .find((r) => r.meta)?.meta?.model,
       mock: useMock,
+      warning: useMock
+        ? "MockGrader run (--allow-mock): these numbers describe the deterministic mock, not Gemini."
+        : null,
       locale: args.locale,
       question: fixtures.question,
+      essays: essays.length,
       runs: Object.entries(byPrompt).map(([promptVersion, results]) => ({
         promptVersion,
-        accuracy: accuracyFor(results).map((a) => ({
-          criterion: a.key,
-          meanAbsDiff: Number.isNaN(a.meanAbsDiff) ? null : Number(a.meanAbsDiff.toFixed(3)),
-          meanSignedBias: Number.isNaN(a.bias) ? null : Number(a.bias.toFixed(3)),
-          exact: a.exact,
-          n: a.n,
-        })),
+        summary: summarize(promptVersion, results, useMock),
         results,
       })),
     };
