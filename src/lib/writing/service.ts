@@ -7,6 +7,11 @@ import { computeEvaluationWarnings, mergeWarnings, type GradingWarning } from "@
 import { env } from "@/lib/env";
 import { countWords } from "@/lib/utils/scoring";
 import type { WritingSubmissionInput } from "@/lib/validations/writing";
+import { Prisma } from "@prisma/client";
+import {
+  IdempotencyConflictError,
+  writingRequestFingerprint,
+} from "@/lib/writing/idempotency";
 
 /**
  * Full writing grading pipeline:
@@ -23,7 +28,7 @@ import type { WritingSubmissionInput } from "@/lib/validations/writing";
  */
 export interface GradingOutcome {
   submissionId: string;
-  status: "COMPLETED" | "FAILED";
+  status: "COMPLETED" | "FAILED" | "PROCESSING";
   /** Development-only diagnostics; undefined in production (see lib/ai/debug.ts). */
   debug?: AIDebugInfo;
 }
@@ -32,23 +37,59 @@ export async function submitAndGradeEssay(params: {
   userId: string;
   input: WritingSubmissionInput;
   feedbackLocale: string;
+  idempotencyKey?: string | null;
 }): Promise<GradingOutcome> {
-  const { userId, input, feedbackLocale } = params;
+  const { userId, input, feedbackLocale, idempotencyKey = null } = params;
   const wordCount = countWords(input.essay);
 
   await failStaleWritingSubmissions(userId);
 
-  const submission = await prisma.submission.create({
-    data: {
-      userId,
-      module: "WRITING",
-      testType: input.testType,
-      question: input.question,
-      essay: input.essay,
-      wordCount,
-      status: "PENDING",
-    },
+  const requestFingerprint = idempotencyKey
+    ? writingRequestFingerprint(input, feedbackLocale)
+    : null;
+  let submission;
+  try {
+    submission = await prisma.submission.create({
+      data: {
+        userId,
+        module: "WRITING",
+        testType: input.testType,
+        question: input.question,
+        essay: input.essay,
+        wordCount,
+        status: "PENDING",
+        idempotencyKey,
+        requestFingerprint,
+      },
+    });
+  } catch (error) {
+    if (!(idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) {
+      throw error;
+    }
+    const existing = await prisma.submission.findUnique({
+      where: { userId_idempotencyKey: { userId, idempotencyKey } },
+    });
+    if (!existing) throw error;
+    if (existing.requestFingerprint !== requestFingerprint) throw new IdempotencyConflictError();
+    if (existing.status === "COMPLETED" || existing.status === "PROCESSING") {
+      return { submissionId: existing.id, status: existing.status };
+    }
+    submission = existing;
+  }
+
+  // Exactly one parallel request is allowed to call the provider. Failed
+  // submissions may be reclaimed with the same key; no new row is created.
+  const claimed = await prisma.submission.updateMany({
+    where: { id: submission.id, userId, status: { in: ["PENDING", "FAILED"] } },
+    data: { status: "PROCESSING", processingStartedAt: new Date() },
   });
+  if (claimed.count !== 1) {
+    const current = await prisma.submission.findUniqueOrThrow({ where: { id: submission.id } });
+    return {
+      submissionId: submission.id,
+      status: current.status === "COMPLETED" ? "COMPLETED" : "PROCESSING",
+    };
+  }
 
   // NOTE: the grader is resolved inside the try on purpose — a misconfigured
   // provider (e.g. AI_MODE=gemini without GEMINI_API_KEY) must fail like any
@@ -56,10 +97,6 @@ export async function submitAndGradeEssay(params: {
   let grader: AIGrader | undefined;
 
   try {
-    await prisma.submission.update({
-      where: { id: submission.id },
-      data: { status: "PROCESSING", processingStartedAt: new Date() },
-    });
     grader = getGrader();
     const result = await grader.gradeWriting({
       question: input.question,
@@ -84,8 +121,16 @@ export async function submitAndGradeEssay(params: {
     logAiDebug({ ...meta, warnings });
 
     await prisma.$transaction([
-      prisma.score.create({
-        data: {
+      prisma.score.upsert({
+        where: { submissionId: submission.id },
+        update: {
+          taskResponse: data.scores.taskResponse.band,
+          coherenceCohesion: data.scores.coherenceCohesion.band,
+          lexicalResource: data.scores.lexicalResource.band,
+          grammar: data.scores.grammar.band,
+          overall,
+        },
+        create: {
           submissionId: submission.id,
           taskResponse: data.scores.taskResponse.band,
           coherenceCohesion: data.scores.coherenceCohesion.band,
@@ -94,8 +139,19 @@ export async function submitAndGradeEssay(params: {
           overall,
         },
       }),
-      prisma.feedback.create({
-        data: {
+      prisma.feedback.upsert({
+        where: { submissionId: submission.id },
+        update: {
+          summary: data.summary,
+          taskResponseNote: data.scores.taskResponse.note,
+          coherenceCohesionNote: data.scores.coherenceCohesion.note,
+          lexicalResourceNote: data.scores.lexicalResource.note,
+          grammarNote: data.scores.grammar.note,
+          strengths: data.strengths,
+          weaknesses: data.weaknesses,
+          improvements: data.improvements,
+        },
+        create: {
           submissionId: submission.id,
           summary: data.summary,
           taskResponseNote: data.scores.taskResponse.note,
@@ -107,6 +163,7 @@ export async function submitAndGradeEssay(params: {
           improvements: data.improvements,
         },
       }),
+      prisma.essayError.deleteMany({ where: { submissionId: submission.id } }),
       ...(data.errors.length
         ? [
             prisma.essayError.createMany({

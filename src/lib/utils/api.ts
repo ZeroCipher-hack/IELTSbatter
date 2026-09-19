@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { UnauthorizedError } from "@/lib/auth/session";
 import { summarizeError } from "@/lib/ai/sanitize";
+import { isIP } from "node:net";
 
 /** Uniform JSON error shape. Never leaks internals or secrets. */
 export function apiError(status: number, code: string, message?: string): NextResponse {
@@ -29,6 +30,12 @@ export function handleApiError(error: unknown): NextResponse {
 }
 
 export function clientIp(request: Request): string {
-  const fwd = request.headers.get("x-forwarded-for");
-  return fwd?.split(",")[0]?.trim() || "unknown";
+  if (process.env.TRUST_PROXY !== "true") return "direct";
+  const candidate = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  if (!candidate) return "unknown";
+  const closingBracket = candidate.indexOf("]");
+  const normalized = candidate.startsWith("[") && closingBracket > 0
+    ? candidate.slice(1, closingBracket)
+    : candidate.replace(/^(\d+\.\d+\.\d+\.\d+):\d+$/, "$1");
+  return isIP(normalized) ? normalized : "unknown";
 }

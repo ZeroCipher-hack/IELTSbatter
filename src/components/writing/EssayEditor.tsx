@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
@@ -26,6 +26,8 @@ export function EssayEditor({ minWords }: { minWords: number }) {
   const [essay, setEssay] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Stable across transport retries; replaced only after a successful submit.
+  const idempotencyKey = useRef<string | null>(null);
 
   const wordCount = useMemo(() => countWords(essay), [essay]);
   const belowMin = essay.trim().length > 0 && wordCount < minWords;
@@ -39,9 +41,14 @@ export function EssayEditor({ minWords }: { minWords: number }) {
     setError(null);
     setSubmitting(true);
     try {
+      idempotencyKey.current ??= crypto.randomUUID();
       const res = await fetch("/api/writing/submit", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "x-axi-locale": locale },
+        headers: {
+          "Content-Type": "application/json",
+          "x-axi-locale": locale,
+          "Idempotency-Key": idempotencyKey.current,
+        },
         body: JSON.stringify({ question, essay, testType: "TASK_2" }),
       });
       const data = await res.json().catch(() => null);
@@ -63,6 +70,7 @@ export function EssayEditor({ minWords }: { minWords: number }) {
         );
         return;
       }
+      idempotencyKey.current = null;
       router.push(`/writing/result/${data.submissionId}`);
     } catch {
       setError(t("errors.generic"));

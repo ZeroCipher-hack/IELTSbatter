@@ -32,6 +32,18 @@ enum SubmissionStatus {
   FAILED
 }
 
+enum SpeakingInterviewState {
+  PREPARING
+  PART_1
+  PART_2
+  PART_3
+  UPLOADING
+  TRANSCRIBING
+  EVALUATING
+  COMPLETED
+  FAILED
+}
+
 enum PaymentProvider {
   CLICK
   PAYME
@@ -48,7 +60,9 @@ enum PaymentStatus {
 
 // ---------------------------------------------------------------- testing
 
-/** Extensible question kinds shared by Reading and Listening. */
+/**
+ * Extensible question kinds shared by Reading and Listening.
+ */
 enum QuestionType {
   MULTIPLE_CHOICE
   TRUE_FALSE_NOT_GIVEN
@@ -83,10 +97,11 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  submissions  Submission[]
-  payments     Payment[]
-  testAttempts TestAttempt[]
-  audioAssets  AudioAsset[]
+  submissions        Submission[]
+  payments           Payment[]
+  testAttempts       TestAttempt[]
+  audioAssets        AudioAsset[]
+  speakingInterviews SpeakingInterview[]
 }
 
 model SmsCode {
@@ -101,25 +116,29 @@ model SmsCode {
 }
 
 model Submission {
-  id        String           @id @default(cuid())
-  userId    String
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  module    Module           @default(WRITING)
-  testType  String           @default("TASK_2")
-  question  String
-  essay     String
-  wordCount Int
-  status    SubmissionStatus @default(PENDING)
+  id                  String           @id @default(cuid())
+  userId              String
+  user                User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  module              Module           @default(WRITING)
+  testType            String           @default("TASK_2")
+  question            String
+  essay               String
+  wordCount           Int
+  status              SubmissionStatus @default(PENDING)
   processingStartedAt DateTime?
-  createdAt DateTime         @default(now())
+  idempotencyKey      String?
+  requestFingerprint  String?
+  createdAt           DateTime         @default(now())
 
-  score          Score?
-  feedback       Feedback?
-  errors         EssayError[]
-  aiEvaluations  AiEvaluation[]
-  speakingResult SpeakingResult?
-  recordings     AudioAsset[]
+  score             Score?
+  feedback          Feedback?
+  errors            EssayError[]
+  aiEvaluations     AiEvaluation[]
+  speakingResult    SpeakingResult?
+  recordings        AudioAsset[]
+  speakingInterview SpeakingInterview?
 
+  @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
 }
 
@@ -136,19 +155,19 @@ model Score {
 }
 
 model Feedback {
-  id           String     @id @default(cuid())
-  submissionId String     @unique
-  submission   Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  summary      String
+  id                    String     @id @default(cuid())
+  submissionId          String     @unique
+  submission            Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  summary               String
   // Per-criterion explanations for the result page.
-  taskResponseNote      String @default("")
-  coherenceCohesionNote String @default("")
-  lexicalResourceNote   String @default("")
-  grammarNote           String @default("")
-  strengths    String[]
-  weaknesses   String[]
-  improvements String[]
-  createdAt    DateTime   @default(now())
+  taskResponseNote      String     @default("")
+  coherenceCohesionNote String     @default("")
+  lexicalResourceNote   String     @default("")
+  grammarNote           String     @default("")
+  strengths             String[]
+  weaknesses            String[]
+  improvements          String[]
+  createdAt             DateTime   @default(now())
 }
 
 model EssayError {
@@ -169,24 +188,24 @@ model EssayError {
 
 // Raw AI responses for debugging and future model comparison.
 model AiEvaluation {
-  id            String     @id @default(cuid())
-  submissionId  String
-  submission    Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  provider      String
-  model         String
-  promptVersion String
-  rawResponse   String
-  latencyMs     Int?
-  success       Boolean    @default(true)
+  id               String     @id @default(cuid())
+  submissionId     String
+  submission       Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  provider         String
+  model            String
+  promptVersion    String
+  rawResponse      String
+  latencyMs        Int?
+  success          Boolean    @default(true)
   // Reliability / cost metadata.
-  attempts         Int?     @default(1)
-  retryCount       Int?     @default(0)
-  validationStatus String?  @default("VALID")
+  attempts         Int?       @default(1)
+  retryCount       Int?       @default(0)
+  validationStatus String?    @default("VALID")
   inputTokens      Int?
   outputTokens     Int?
   // Non-fatal operator observations (see src/lib/ai/warnings.ts).
-  warnings         String[] @default([])
-  createdAt     DateTime   @default(now())
+  warnings         String[]   @default([])
+  createdAt        DateTime   @default(now())
 
   @@index([submissionId])
 }
@@ -225,8 +244,9 @@ model Test {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  sections TestSection[]
-  attempts TestAttempt[]
+  sections           TestSection[]
+  attempts           TestAttempt[]
+  speakingInterviews SpeakingInterview[]
 
   @@index([module, isPublished])
 }
@@ -238,9 +258,13 @@ model TestSection {
   order        Int
   title        String
   instructions String?
-  /** Reading only: the passage body. */
+  /**
+   * Reading only: the passage body.
+   */
   passage      String?
-  /** Listening only: audio is referenced as a file, never stored as binary here. */
+  /**
+   * Listening only: audio is referenced as a file, never stored as binary here.
+   */
   audioAssetId String?     @unique
   audioAsset   AudioAsset? @relation("SectionAudio", fields: [audioAssetId], references: [id], onDelete: SetNull)
 
@@ -250,23 +274,33 @@ model TestSection {
 }
 
 model TestQuestion {
-  id          String      @id @default(cuid())
+  id          String       @id @default(cuid())
   sectionId   String
-  section     TestSection @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  section     TestSection  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
   order       Int
-  /** Display number (for example 1..40). */
+  /**
+   * Display number (for example 1..40).
+   */
   number      Int
   type        QuestionType
   prompt      String
-  /** Answer options for choice/matching questions: [{ value, label }]. */
+  /**
+   * Answer options for choice/matching questions: [{ value, label }].
+   */
   options     Json?
-  /** Canonical accepted answers: { answers: string[] }. Never sent before grading. */
+  /**
+   * Canonical accepted answers: { answers: string[] }. Never sent before grading.
+   */
   answer      Json
   explanation String?
-  points      Int         @default(1)
-  /** Question-type specific extras (word limits, recording windows, ...). */
+  points      Int          @default(1)
+  /**
+   * Question-type specific extras (word limits, recording windows, ...).
+   */
   meta        Json?
-  /** Questions sharing one option list (matching groups) share a groupId. */
+  /**
+   * Questions sharing one option list (matching groups) share a groupId.
+   */
   groupId     String?
 
   answers TestAnswer[]
@@ -286,20 +320,26 @@ model AudioAsset {
   mimeType        String
   sizeBytes       Int?
   durationSeconds Int?
-  /** Owner of user recordings (speaking); null for published test audio. */
+  /**
+   * Owner of user recordings (speaking); null for published test audio.
+   */
   userId          String?
   user            User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  submissionId    String?     @unique
+  submissionId    String?
   submission      Submission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  speakingPart    Int?
   createdAt       DateTime    @default(now())
 
   sections TestSection[] @relation("SectionAudio")
 
+  @@unique([submissionId, speakingPart])
   @@index([userId])
   @@index([submissionId])
 }
 
-/** One user's attempt at a test. */
+/**
+ * One user's attempt at a test.
+ */
 model TestAttempt {
   id               String        @id @default(cuid())
   userId           String
@@ -328,7 +368,9 @@ model TestAnswer {
   attempt       TestAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
   questionId    String
   question      TestQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
-  /** Raw learner response, shaped by the question type. */
+  /**
+   * Raw learner response, shaped by the question type.
+   */
   response      Json
   isCorrect     Boolean?
   awardedPoints Int?
@@ -347,7 +389,9 @@ model SpeakingResult {
   id                    String     @id @default(cuid())
   submissionId          String     @unique
   submission            Submission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
-  /** Transcript produced by the transcription provider (mock in development). */
+  /**
+   * Transcript produced by the transcription provider (mock in development).
+   */
   transcript            String
   transcriptionProvider String
   transcriptionModel    String?
@@ -363,8 +407,35 @@ model SpeakingResult {
   aiProvider            String
   aiModel               String
   promptVersion         String
-  /** True when the evaluation came from MockSpeakingGrader, never a real model. */
+  /**
+   * True when the evaluation came from MockSpeakingGrader, never a real model.
+   */
   isMock                Boolean    @default(true)
   rawResponse           String?
   createdAt             DateTime   @default(now())
+}
+
+/**
+ * Durable, server-authoritative state for a complete three-part interview.
+ */
+model SpeakingInterview {
+  id              String                 @id @default(cuid())
+  userId          String
+  user            User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testId          String
+  test            Test                   @relation(fields: [testId], references: [id], onDelete: Cascade)
+  submissionId    String                 @unique
+  submission      Submission             @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+  state           SpeakingInterviewState @default(PREPARING)
+  currentPart     Int                    @default(1)
+  currentPromptId String
+  startedAt       DateTime               @default(now())
+  stateStartedAt  DateTime               @default(now())
+  completedAt     DateTime?
+  failureReason   String?
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+
+  @@index([userId, testId, createdAt])
+  @@index([state, stateStartedAt])
 }

@@ -9,7 +9,7 @@ import { rateLimit } from "@/lib/utils/rate-limit";
 
 export async function POST(request: Request) {
   try {
-    if (!rateLimit(`register:${clientIp(request)}`, { limit: 10, windowMs: 60_000 })) {
+    if (!(await rateLimit(`register:${clientIp(request)}`, { limit: 10, windowMs: 60_000 }))) {
       return apiError(429, "rate_limited");
     }
 

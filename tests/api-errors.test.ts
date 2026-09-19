@@ -59,10 +59,13 @@ describe("handleApiError", () => {
 });
 
 describe("clientIp", () => {
-  it("uses the first forwarded address and falls back safely", () => {
+  it("only trusts a validated forwarded address behind a configured proxy", () => {
+    process.env.TRUST_PROXY = "true";
     expect(
       clientIp(new Request("http://localhost", { headers: { "x-forwarded-for": "1.2.3.4, 5.6.7.8" } }))
     ).toBe("1.2.3.4");
-    expect(clientIp(new Request("http://localhost"))).toBe("unknown");
+    expect(clientIp(new Request("http://localhost", { headers: { "x-forwarded-for": "spoof" } }))).toBe("unknown");
+    delete process.env.TRUST_PROXY;
+    expect(clientIp(new Request("http://localhost", { headers: { "x-forwarded-for": "1.2.3.4" } }))).toBe("direct");
   });
 });

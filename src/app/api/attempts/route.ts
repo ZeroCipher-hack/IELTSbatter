@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   try {
     const session = await requireSession();
 
-    if (!rateLimit(`attempt:user:${session.userId}`, { limit: 20, windowMs: 60_000 })) {
+    if (!(await rateLimit(`attempt:user:${session.userId}`, { limit: 20, windowMs: 60_000 }))) {
       return apiError(429, "rate_limited");
     }
 
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
 export async function GET(request: Request) {
   try {
     const session = await requireSession();
-    if (!rateLimit(`attempt-list:ip:${clientIp(request)}`, { limit: 120, windowMs: 60_000 })) {
+    if (!(await rateLimit(`attempt-list:ip:${clientIp(request)}`, { limit: 120, windowMs: 60_000 }))) {
       return apiError(429, "rate_limited");
     }
 

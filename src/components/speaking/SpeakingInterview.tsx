@@ -5,13 +5,13 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import type { PublicSpeakingTest, SpeakingPrompt } from "@/lib/speaking/types";
+import type { PublicSpeakingTest, SpeakingInterviewSnapshot, SpeakingPrompt } from "@/lib/speaking/types";
 
 type Phase = "idle" | "preparing" | "recording" | "recorded" | "uploading" | "evaluating" | "error";
 
 interface SpeakingInterviewProps {
   test: PublicSpeakingTest;
-  initialPromptId?: string;
+  initialInterview: SpeakingInterviewSnapshot;
   locale: string;
 }
 
@@ -24,20 +24,29 @@ interface SpeakingInterviewProps {
  * The recording is uploaded as a file; audio never lives in the database and
  * the evaluation happens server-side.
  */
-export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInterviewProps) {
+export function SpeakingInterview({ test, initialInterview, locale }: SpeakingInterviewProps) {
   const t = useTranslations("speaking");
   const router = useRouter();
 
   const prompts = test.prompts;
-  const [activeId, setActiveId] = useState(initialPromptId ?? prompts[0]?.id ?? "");
+  const [interview, setInterview] = useState(initialInterview);
+  const [activeId, setActiveId] = useState(initialInterview.currentPromptId);
   const activePrompt = useMemo(
     () => prompts.find((prompt) => prompt.id === activeId) ?? prompts[0],
     [activeId, prompts]
   );
 
-  const [phase, setPhase] = useState<Phase>("idle");
-  const [prepLeft, setPrepLeft] = useState(activePrompt?.preparationSeconds ?? 0);
-  const [speakLeft, setSpeakLeft] = useState(activePrompt?.speakingSeconds ?? 0);
+  const [phase, setPhase] = useState<Phase>(
+    initialInterview.state === "PREPARING" && initialInterview.remainingSeconds > 0 ? "preparing" : "idle"
+  );
+  const [prepLeft, setPrepLeft] = useState(
+    initialInterview.state === "PREPARING" ? initialInterview.remainingSeconds : 0
+  );
+  const [speakLeft, setSpeakLeft] = useState(
+    initialInterview.state.startsWith("PART_")
+      ? initialInterview.remainingSeconds
+      : activePrompt?.speakingSeconds ?? 0
+  );
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingSize, setRecordingSize] = useState(0);
   const [errorKey, setErrorKey] = useState<string | null>(null);
@@ -102,6 +111,22 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
     if (!activePrompt) return;
     setErrorKey(null);
 
+    try {
+      const response = await fetch(`/api/speaking/interviews/${interview.id}/transition`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "BEGIN_PART" }),
+      });
+      if (!response.ok) throw new Error("invalid_transition");
+      const body = (await response.json()) as { interview: SpeakingInterviewSnapshot };
+      setInterview(body.interview);
+      setSpeakLeft(body.interview.remainingSeconds);
+    } catch {
+      setErrorKey("errors.submitFailed");
+      setPhase("error");
+      return;
+    }
+
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       setErrorKey("errors.micUnsupported");
       setPhase("error");
@@ -153,30 +178,14 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
 
     recorderRef.current = recorder;
     recorder.start();
-    setSpeakLeft(activePrompt.speakingSeconds);
     setPhase("recording");
 
     // Hard stop at the prompt's speaking limit, with a small grace period.
     stopTimerRef.current = setTimeout(
       () => stopRecording(),
-      (activePrompt.speakingSeconds + 2) * 1000
+      (Math.max(1, speakLeft) + 2) * 1000
     );
-  }, [activePrompt, stopRecording]);
-
-  function switchPrompt(prompt: SpeakingPrompt) {
-    if (["preparing", "recording", "uploading", "evaluating"].includes(phase)) return;
-    setActiveId(prompt.id);
-    setPhase("idle");
-    setPrepLeft(prompt.preparationSeconds);
-    setSpeakLeft(prompt.speakingSeconds);
-    setErrorKey(null);
-    setRecordingUrl((previous) => {
-      if (previous) URL.revokeObjectURL(previous);
-      return null;
-    });
-    blobRef.current = null;
-    setRecordingSize(0);
-  }
+  }, [activePrompt, interview.id, speakLeft, stopRecording]);
 
   /* -------------------------------------------------------------- submit */
 
@@ -186,13 +195,7 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
     setPhase("uploading");
 
     try {
-      const created = await fetch("/api/speaking/submissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ testId: test.id, promptId: activePrompt.id }),
-      });
-      if (!created.ok) throw new Error("create_failed");
-      const { submissionId } = (await created.json()) as { submissionId: string };
+      const submissionId = interview.submissionId;
 
       const form = new FormData();
       const extension = blobRef.current.type.includes("wav")
@@ -204,12 +207,35 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
             : "webm";
       form.append("audio", blobRef.current, `answer.${extension}`);
       form.append("durationSeconds", String(Math.max(0, activePrompt.speakingSeconds - speakLeft)));
+      form.append("part", String(interview.currentPart));
 
       const uploaded = await fetch(`/api/speaking/submissions/${submissionId}/audio`, {
         method: "POST",
         body: form,
       });
       if (!uploaded.ok) throw new Error("upload_failed");
+
+      const recovered = await fetch(`/api/speaking/interviews/${interview.id}`, { cache: "no-store" });
+      if (!recovered.ok) throw new Error("recovery_failed");
+      const recoveredBody = (await recovered.json()) as { interview: SpeakingInterviewSnapshot };
+      setInterview(recoveredBody.interview);
+
+      if (recoveredBody.interview.state === "PREPARING") {
+        setActiveId(recoveredBody.interview.currentPromptId);
+        setPrepLeft(recoveredBody.interview.remainingSeconds);
+        setSpeakLeft(
+          prompts.find((prompt) => prompt.id === recoveredBody.interview.currentPromptId)?.speakingSeconds ?? 0
+        );
+        setRecordingUrl((previous) => {
+          if (previous) URL.revokeObjectURL(previous);
+          return null;
+        });
+        blobRef.current = null;
+        setRecordingSize(0);
+        setPhase(recoveredBody.interview.remainingSeconds > 0 ? "preparing" : "idle");
+        return;
+      }
+      if (recoveredBody.interview.state !== "TRANSCRIBING") throw new Error("invalid_state");
 
       setPhase("evaluating");
       const evaluated = await fetch(`/api/speaking/submissions/${submissionId}/evaluate`, {
@@ -283,18 +309,6 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
           </div>
 
           <div className="mt-5 flex flex-wrap gap-3">
-            {activePrompt.preparationSeconds > 0 && phase === "idle" && (
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  setPrepLeft(activePrompt.preparationSeconds);
-                  setPhase("preparing");
-                }}
-              >
-                {t("startPreparation", { seconds: activePrompt.preparationSeconds })}
-              </Button>
-            )}
-
             {(phase === "idle" || phase === "error") && (
               <Button onClick={() => void startRecording()} data-testid="start-recording">
                 {t("startRecording")}
@@ -355,8 +369,7 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
               <li key={prompt.id}>
                 <button
                   type="button"
-                  onClick={() => switchPrompt(prompt)}
-                  disabled={["preparing", "recording", "uploading", "evaluating"].includes(phase)}
+                  disabled={prompt.id !== activeId || ["preparing", "recording", "uploading", "evaluating"].includes(phase)}
                   className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
                     prompt.id === activeId
                       ? "border-brand-500 bg-brand-50 text-brand-800"

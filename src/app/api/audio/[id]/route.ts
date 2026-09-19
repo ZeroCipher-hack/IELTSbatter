@@ -28,7 +28,7 @@ export async function GET(_request: Request, props: { params: Promise<{ id: stri
       return apiError(404, "audio_not_found");
     }
 
-    const file = await getPrivateStorage().read(asset.storageKey);
+    const file = await getPrivateStorage().get(asset.storageKey);
     if (!file) return apiError(404, "audio_not_found");
 
     return new NextResponse(new Uint8Array(file.data), {

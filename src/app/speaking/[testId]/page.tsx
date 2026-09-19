@@ -5,7 +5,7 @@ import { getTranslations } from "next-intl/server";
 import { Header } from "@/components/layout/Header";
 import { SpeakingInterview } from "@/components/speaking/SpeakingInterview";
 import { getSession } from "@/lib/auth/session";
-import { getPublicSpeakingTest } from "@/lib/speaking/service";
+import { createOrResumeSpeakingInterview, getPublicSpeakingTest } from "@/lib/speaking/service";
 
 export default async function SpeakingTestPage(
   props: {
@@ -19,6 +19,11 @@ export default async function SpeakingTestPage(
   const t = await getTranslations("speaking");
   const test = await getPublicSpeakingTest(params.testId);
   if (!test) notFound();
+  const interview = await createOrResumeSpeakingInterview({
+    userId: session.userId,
+    testId: params.testId,
+  });
+  if (!interview) notFound();
 
   // Feedback language follows the UI locale cookie (same as the Writing flow).
   const locale = (await cookies()).get("axi_locale")?.value === "ru" ? "ru" : "uz";
@@ -41,7 +46,7 @@ export default async function SpeakingTestPage(
         </div>
 
         <div className="mt-6">
-          <SpeakingInterview test={test} locale={locale} />
+          <SpeakingInterview test={test} locale={locale} initialInterview={interview} />
         </div>
       </main>
     </div>

@@ -6,6 +6,11 @@ import { apiError, handleApiError, clientIp } from "@/lib/utils/api";
 import { rateLimit } from "@/lib/utils/rate-limit";
 import { countWords } from "@/lib/utils/scoring";
 import { env } from "@/lib/env";
+import {
+  IdempotencyConflictError,
+  InvalidIdempotencyKeyError,
+  parseIdempotencyKey,
+} from "@/lib/writing/idempotency";
 
 export const maxDuration = 120; // AI grading can take a while
 
@@ -15,8 +20,8 @@ export async function POST(request: Request) {
 
     // Per-user + per-IP limits: AI calls are expensive.
     if (
-      !rateLimit(`submit:user:${session.userId}`, { limit: 6, windowMs: 60_000 }) ||
-      !rateLimit(`submit:ip:${clientIp(request)}`, { limit: 12, windowMs: 60_000 })
+      !(await rateLimit(`submit:user:${session.userId}`, { limit: 6, windowMs: 60_000 })) ||
+      !(await rateLimit(`submit:ip:${clientIp(request)}`, { limit: 12, windowMs: 60_000 }))
     ) {
       return apiError(429, "rate_limited");
     }
@@ -29,15 +34,23 @@ export async function POST(request: Request) {
     }
 
     const locale = request.headers.get("x-axi-locale") === "ru" ? "ru" : "uz";
+    const idempotencyKey = parseIdempotencyKey(request.headers.get("idempotency-key"));
 
     const result = await submitAndGradeEssay({
       userId: session.userId,
       input,
       feedbackLocale: locale,
+      idempotencyKey,
     });
 
     if (result.status === "FAILED") {
       return apiError(502, "grading_failed", "Something went wrong. Please try again.");
+    }
+    if (result.status === "PROCESSING") {
+      return NextResponse.json(
+        { submissionId: result.submissionId, status: result.status },
+        { status: 202 }
+      );
     }
 
     // `debug` is only present outside production (see lib/ai/debug.ts).
@@ -46,6 +59,12 @@ export async function POST(request: Request) {
       ...(result.debug ? { debug: result.debug } : {}),
     });
   } catch (error) {
+    if (error instanceof InvalidIdempotencyKeyError) {
+      return apiError(400, error.message);
+    }
+    if (error instanceof IdempotencyConflictError) {
+      return apiError(409, error.message);
+    }
     return handleApiError(error);
   }
 }

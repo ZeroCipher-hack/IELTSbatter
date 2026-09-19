@@ -28,10 +28,10 @@ export interface StoredFile {
 export interface StorageProvider {
   readonly name: string;
   readonly visibility: StorageVisibility;
-  save(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile>;
-  read(key: string): Promise<{ data: Buffer; mimeType: string } | null>;
+  put(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile>;
+  get(key: string): Promise<{ data: Buffer; mimeType: string } | null>;
   exists(key: string): Promise<boolean>;
-  remove(key: string): Promise<void>;
+  delete(key: string): Promise<void>;
   /** URL a client can use to fetch the asset. */
   urlFor(key: string): string;
 }
@@ -72,7 +72,7 @@ class FsStorage implements StorageProvider {
     return `${this.urlPrefix}/${key}`;
   }
 
-  async save(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile> {
+  async put(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile> {
     assertSafeKey(input.key);
     const target = path.join(this.root, input.key);
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -85,7 +85,7 @@ class FsStorage implements StorageProvider {
     };
   }
 
-  async read(key: string): Promise<{ data: Buffer; mimeType: string } | null> {
+  async get(key: string): Promise<{ data: Buffer; mimeType: string } | null> {
     assertSafeKey(key);
     try {
       const data = await fs.readFile(path.join(this.root, key));
@@ -105,7 +105,7 @@ class FsStorage implements StorageProvider {
     }
   }
 
-  async remove(key: string): Promise<void> {
+  async delete(key: string): Promise<void> {
     assertSafeKey(key);
     await fs.rm(path.join(this.root, key), { force: true });
   }
@@ -177,7 +177,7 @@ export class MemoryStorage implements StorageProvider {
     return `${this.urlPrefix}/${key}`;
   }
 
-  async save(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile> {
+  async put(input: { key: string; data: Uint8Array; mimeType: string }): Promise<StoredFile> {
     const buffer = Buffer.from(input.data);
     this.files.set(input.key, { data: buffer, mimeType: input.mimeType });
     return {
@@ -188,7 +188,7 @@ export class MemoryStorage implements StorageProvider {
     };
   }
 
-  async read(key: string) {
+  async get(key: string) {
     return this.files.get(key) ?? null;
   }
 
@@ -196,7 +196,7 @@ export class MemoryStorage implements StorageProvider {
     return this.files.has(key);
   }
 
-  async remove(key: string) {
+  async delete(key: string) {
     this.files.delete(key);
   }
 

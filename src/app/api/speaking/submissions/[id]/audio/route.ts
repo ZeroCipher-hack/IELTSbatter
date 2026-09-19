@@ -24,8 +24,8 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
     const session = await requireSession();
 
     if (
-      !rateLimit(`speaking-upload:user:${session.userId}`, { limit: 10, windowMs: 60_000 }) ||
-      !rateLimit(`speaking-upload:ip:${clientIp(request)}`, { limit: 20, windowMs: 60_000 })
+      !(await rateLimit(`speaking-upload:user:${session.userId}`, { limit: 10, windowMs: 60_000 })) ||
+      !(await rateLimit(`speaking-upload:ip:${clientIp(request)}`, { limit: 20, windowMs: 60_000 }))
     ) {
       return apiError(429, "rate_limited");
     }
@@ -48,6 +48,11 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
     }
 
     const durationRaw = form.get("durationSeconds");
+    const partRaw = form.get("part");
+    const speakingPart = typeof partRaw === "string" ? Number(partRaw) : Number.NaN;
+    if (!Number.isInteger(speakingPart) || speakingPart < 1 || speakingPart > 3) {
+      return apiError(400, "invalid_speaking_part");
+    }
     let durationSeconds: number | null = null;
     if (durationRaw != null) {
       if (
@@ -78,6 +83,7 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
       data: buffer,
       mimeType,
       durationSeconds,
+      speakingPart,
     });
     // Unknown id or another user's submission.
     if (!stored) return apiError(404, "submission_not_found");

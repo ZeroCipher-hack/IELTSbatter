@@ -33,3 +33,16 @@ export interface PublicSpeakingTest {
   description: string | null;
   prompts: SpeakingPrompt[];
 }
+
+export interface SpeakingInterviewSnapshot {
+  id: string;
+  submissionId: string;
+  testId: string;
+  state: "PREPARING" | "PART_1" | "PART_2" | "PART_3" | "UPLOADING" | "TRANSCRIBING" | "EVALUATING" | "COMPLETED" | "FAILED";
+  currentPart: number;
+  currentPromptId: string;
+  stateStartedAt: string;
+  serverNow: string;
+  remainingSeconds: number;
+  failureReason: string | null;
+}

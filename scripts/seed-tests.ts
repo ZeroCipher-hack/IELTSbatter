@@ -521,7 +521,7 @@ async function seedTest(test: SeedTest): Promise<string> {
       // One audio asset per section: a section owns exactly one file.
       const key = `listening/practice-1-section-${sectionIndex + 1}.wav`;
       const durationSeconds = 4;
-      const stored = await getPublicStorage().save({
+      const stored = await getPublicStorage().put({
         key,
         data: makeSampleWav(durationSeconds),
         mimeType: "audio/wav",

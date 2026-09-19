@@ -17,12 +17,15 @@ import type {
 } from "@/lib/ai/speaking/types";
 import {
   attachRecording,
+  createOrResumeSpeakingInterview,
   createSpeakingSubmission,
   evaluateSpeakingSubmission,
   getOwnSpeakingSubmission,
   getPublicSpeakingTest,
   getSpeakingProgress,
   listSpeakingTests,
+  recoverSpeakingInterview,
+  transitionSpeakingInterview,
 } from "@/lib/speaking/service";
 
 process.env.DATABASE_URL ??= "postgresql://axi:axi@localhost:5432/axi";
@@ -70,6 +73,16 @@ beforeAll(async () => {
               ],
             },
           },
+          {
+            order: 1,
+            title: "Part 2 — Cue card",
+            questions: { create: [{ number: 2, order: 0, type: "SHORT_ANSWER", prompt: "Describe a useful object.", answer: { answers: [] }, meta: { prepSeconds: 0, speakSeconds: 60 }, points: 1 }] },
+          },
+          {
+            order: 2,
+            title: "Part 3 — Discussion",
+            questions: { create: [{ number: 3, order: 0, type: "SHORT_ANSWER", prompt: "Why are useful objects important?", answer: { answers: [] }, meta: { prepSeconds: 0, speakSeconds: 60 }, points: 1 }] },
+          },
         ],
       },
     },
@@ -80,9 +93,10 @@ beforeAll(async () => {
   promptId = test.sections[0].questions[0].id;
 });
 
-afterEach(() => {
+afterEach(async () => {
   setSpeakingProvidersForTesting({});
   resetStorage();
+  await prisma.submission.deleteMany({ where: { userId: { in: [userA.id, userB.id] }, module: "SPEAKING" } });
 });
 
 afterAll(async () => {
@@ -99,7 +113,7 @@ describe("speaking catalog", () => {
     expect(tests.some((t) => t.id === testId)).toBe(true);
 
     const test = await getPublicSpeakingTest(testId);
-    expect(test!.prompts).toHaveLength(1);
+    expect(test!.prompts).toHaveLength(3);
     expect(test!.prompts[0].preparationSeconds).toBe(3);
     expect(test!.prompts[0].speakingSeconds).toBe(45);
     expect(test!.prompts[0].part).toBe(1);
@@ -115,6 +129,63 @@ describe("speaking catalog", () => {
   });
 });
 
+describe("server-side interview recovery", () => {
+  it("recovers the same state after refresh and browser reconnect", async () => {
+    const first = await createOrResumeSpeakingInterview({ userId: userA.id, testId });
+    const reconnect = await createOrResumeSpeakingInterview({ userId: userA.id, testId });
+    const refresh = await recoverSpeakingInterview(userA.id, first!.id);
+    expect(reconnect).toMatchObject({ id: first!.id, submissionId: first!.submissionId, state: "PREPARING" });
+    expect(refresh).toMatchObject({ id: first!.id, currentPromptId: first!.currentPromptId });
+  });
+
+  it("rejects an early transition and makes its retry idempotent", async () => {
+    const interview = await createOrResumeSpeakingInterview({ userId: userA.id, testId });
+    await expect(transitionSpeakingInterview({ userId: userA.id, interviewId: interview!.id, action: "BEGIN_PART" }))
+      .rejects.toMatchObject({ code: "timer_not_elapsed" });
+    await prisma.speakingInterview.update({
+      where: { id: interview!.id },
+      data: { stateStartedAt: new Date(Date.now() - 10_000) },
+    });
+    const first = await transitionSpeakingInterview({ userId: userA.id, interviewId: interview!.id, action: "BEGIN_PART" });
+    const duplicate = await transitionSpeakingInterview({ userId: userA.id, interviewId: interview!.id, action: "BEGIN_PART" });
+    expect(duplicate).toMatchObject({ id: first!.id, state: "PART_1" });
+  });
+
+  it("fails an expired speaking timer using server state", async () => {
+    const interview = await createOrResumeSpeakingInterview({ userId: userA.id, testId });
+    await prisma.speakingInterview.update({
+      where: { id: interview!.id },
+      data: { state: "PART_1", stateStartedAt: new Date(Date.now() - 2 * 60_000) },
+    });
+    const recovered = await recoverSpeakingInterview(userA.id, interview!.id);
+    expect(recovered).toMatchObject({ state: "FAILED", failureReason: "timer_expired" });
+    const submission = await prisma.submission.findUniqueOrThrow({ where: { id: interview!.submissionId } });
+    expect(submission.status).toBe("FAILED");
+  });
+});
+
+async function beginPart(submissionId: string, part: number) {
+  const interview = await prisma.speakingInterview.findUniqueOrThrow({ where: { submissionId } });
+  await prisma.speakingInterview.update({
+    where: { id: interview.id },
+    data: { stateStartedAt: new Date(Date.now() - 10_000) },
+  });
+  return transitionSpeakingInterview({ userId: userA.id, interviewId: interview.id, action: "BEGIN_PART" });
+}
+
+async function uploadAllParts(submissionId: string) {
+  for (let part = 1; part <= 3; part += 1) {
+    await beginPart(submissionId, part);
+    await attachRecording({
+      userId: userA.id,
+      submissionId,
+      data: FAKE_AUDIO,
+      mimeType: "audio/webm",
+      speakingPart: part,
+    });
+  }
+}
+
 describe("recording storage", () => {
   it("stores the upload as a private asset and keeps no binary in the database", async () => {
     const storage = new MemoryStorage("memory-test", "private", "/api/audio");
@@ -122,12 +193,14 @@ describe("recording storage", () => {
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
     expect(created).not.toBeNull();
+    await beginPart(created!.submissionId, 1);
 
     const audio = await attachRecording({
       userId: userA.id,
       submissionId: created!.submissionId,
       data: FAKE_AUDIO,
       mimeType: "audio/webm",
+      speakingPart: 1,
       durationSeconds: 12,
     });
 
@@ -149,27 +222,30 @@ describe("recording storage", () => {
       submissionId: created!.submissionId,
       data: FAKE_AUDIO,
       mimeType: "audio/webm",
+      speakingPart: 1,
     });
     expect(denied).toBeNull();
   });
 
-  it("refuses duplicate recordings for one submission", async () => {
+  it("makes duplicate upload retries idempotent", async () => {
     setStorageForTesting({ private: new MemoryStorage() });
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
-    await attachRecording({
+    await beginPart(created!.submissionId, 1);
+    const first = await attachRecording({
       userId: userA.id,
       submissionId: created!.submissionId,
       data: FAKE_AUDIO,
       mimeType: "audio/webm",
+      speakingPart: 1,
     });
-    await expect(
-      attachRecording({
+    const retry = await attachRecording({
         userId: userA.id,
         submissionId: created!.submissionId,
         data: FAKE_AUDIO,
         mimeType: "audio/webm",
-      })
-    ).rejects.toMatchObject({ code: "recording_already_uploaded" });
+        speakingPart: 1,
+      });
+    expect(retry).toEqual(first);
   });
 });
 
@@ -186,13 +262,7 @@ describe("evaluation pipeline (mock providers)", () => {
     });
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
-    await attachRecording({
-      userId: userA.id,
-      submissionId: created!.submissionId,
-      data: FAKE_AUDIO,
-      mimeType: "audio/webm",
-      durationSeconds: 20,
-    });
+    await uploadAllParts(created!.submissionId);
 
     const result = await evaluateSpeakingSubmission({
       userId: userA.id,
@@ -214,7 +284,7 @@ describe("evaluation pipeline (mock providers)", () => {
     // The transcript becomes the submission text so the dashboard is uniform.
     expect(stored!.essay).toBe(result!.transcript);
     expect(stored!.wordCount).toBeGreaterThan(0);
-    expect(stored!.recordings).toHaveLength(1);
+    expect(stored!.recordings).toHaveLength(3);
 
     const retry = await evaluateSpeakingSubmission({
       userId: userA.id,
@@ -239,7 +309,7 @@ describe("evaluation pipeline (mock providers)", () => {
     });
 
     expect(result!.status).toBe("FAILED");
-    expect(result!.reason).toBe("no_recording");
+    expect(result!.reason).toBe("incomplete_recordings");
 
     const stored = await getOwnSpeakingSubmission(userA.id, created!.submissionId);
     expect(stored!.status).toBe("FAILED");
@@ -277,12 +347,7 @@ describe("evaluation pipeline (mock providers)", () => {
     });
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
-    await attachRecording({
-      userId: userA.id,
-      submissionId: created!.submissionId,
-      data: FAKE_AUDIO,
-      mimeType: "audio/webm",
-    });
+    await uploadAllParts(created!.submissionId);
 
     const result = await evaluateSpeakingSubmission({
       userId: userA.id,
@@ -295,6 +360,16 @@ describe("evaluation pipeline (mock providers)", () => {
 
     const stored = await getOwnSpeakingSubmission(userA.id, created!.submissionId);
     expect(stored!.speakingResult).toBeNull();
+
+    setSpeakingProvidersForTesting({
+      transcriber: new MockTranscriptionProvider(),
+      grader: new MockSpeakingGrader(),
+    });
+    const recovered = await evaluateSpeakingSubmission({
+      userId: userA.id,
+      submissionId: created!.submissionId,
+    });
+    expect(recovered).toMatchObject({ status: "COMPLETED", isMock: true });
   });
 
   it("returns FAILED when the transcription is empty", async () => {
@@ -322,12 +397,7 @@ describe("evaluation pipeline (mock providers)", () => {
     });
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
-    await attachRecording({
-      userId: userA.id,
-      submissionId: created!.submissionId,
-      data: FAKE_AUDIO,
-      mimeType: "audio/webm",
-    });
+    await uploadAllParts(created!.submissionId);
 
     const result = await evaluateSpeakingSubmission({
       userId: userA.id,
@@ -358,12 +428,7 @@ describe("ownership and progress", () => {
     });
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
-    await attachRecording({
-      userId: userA.id,
-      submissionId: created!.submissionId,
-      data: FAKE_AUDIO,
-      mimeType: "audio/webm",
-    });
+    await uploadAllParts(created!.submissionId);
     await evaluateSpeakingSubmission({ userId: userA.id, submissionId: created!.submissionId });
 
     expect(await getOwnSpeakingSubmission(userB.id, created!.submissionId)).toBeNull();
@@ -371,6 +436,11 @@ describe("ownership and progress", () => {
   });
 
   it("reports progress and the mock flag from the database", async () => {
+    setStorageForTesting({ private: new MemoryStorage() });
+    setSpeakingProvidersForTesting({ transcriber: new MockTranscriptionProvider(), grader: new MockSpeakingGrader() });
+    const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
+    await uploadAllParts(created!.submissionId);
+    await evaluateSpeakingSubmission({ userId: userA.id, submissionId: created!.submissionId });
     const progress = await getSpeakingProgress(userA.id);
     expect(progress.attempts).toBeGreaterThan(0);
     expect(progress.latestBand).not.toBeNull();

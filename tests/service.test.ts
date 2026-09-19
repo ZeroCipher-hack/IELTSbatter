@@ -3,7 +3,7 @@
  * database (uses DATABASE_URL). The AI provider is mocked/injected so no
  * external API is ever called.
  */
-import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { setGraderForTesting } from "@/lib/ai/grading";
 import { AIGradingError } from "@/lib/ai/gemini";
@@ -94,6 +94,65 @@ function graderReturning(payload: WritingGradingResponse, metaOverrides: Partial
 }
 
 describe("submitAndGradeEssay", () => {
+  it("returns the same durable submission for a transport retry", async () => {
+    const key = `retry-${crypto.randomUUID()}`;
+    const first = await submitAndGradeEssay({
+      userId: userA.id,
+      input: { question, essay, testType: "TASK_2" },
+      feedbackLocale: "uz",
+      idempotencyKey: key,
+    });
+    const retry = await submitAndGradeEssay({
+      userId: userA.id,
+      input: { question, essay, testType: "TASK_2" },
+      feedbackLocale: "uz",
+      idempotencyKey: key,
+    });
+    expect(retry.submissionId).toBe(first.submissionId);
+    expect(await prisma.submission.count({ where: { userId: userA.id, idempotencyKey: key } })).toBe(1);
+  });
+
+  it("claims concurrent same-key requests only once", async () => {
+    const grader = graderReturning(aiPayload());
+    const spy = vi.spyOn(grader, "gradeWriting");
+    setGraderForTesting(grader);
+    const params = {
+      userId: userA.id,
+      input: { question, essay, testType: "TASK_2" as const },
+      feedbackLocale: "uz",
+      idempotencyKey: `concurrent-${crypto.randomUUID()}`,
+    };
+    const [first, second] = await Promise.all([
+      submitAndGradeEssay(params),
+      submitAndGradeEssay(params),
+    ]);
+    expect(first.submissionId).toBe(second.submissionId);
+    expect(spy).toHaveBeenCalledOnce();
+  });
+
+  it("scopes the same key independently per user", async () => {
+    const key = `shared-${crypto.randomUUID()}`;
+    const [first, second] = await Promise.all([
+      submitAndGradeEssay({ userId: userA.id, input: { question, essay, testType: "TASK_2" }, feedbackLocale: "uz", idempotencyKey: key }),
+      submitAndGradeEssay({ userId: userB.id, input: { question, essay, testType: "TASK_2" }, feedbackLocale: "uz", idempotencyKey: key }),
+    ]);
+    expect(first.submissionId).not.toBe(second.submissionId);
+  });
+
+  it("retries a FAILED submission without creating a second row", async () => {
+    const key = `failed-${crypto.randomUUID()}`;
+    setGraderForTesting({
+      provider: "test", model: "failure", promptVersion: "TEST_V1",
+      async gradeWriting() { throw new Error("provider unavailable"); },
+    });
+    const failed = await submitAndGradeEssay({ userId: userA.id, input: { question, essay, testType: "TASK_2" }, feedbackLocale: "uz", idempotencyKey: key });
+    expect(failed.status).toBe("FAILED");
+    setGraderForTesting(new MockGrader());
+    const retried = await submitAndGradeEssay({ userId: userA.id, input: { question, essay, testType: "TASK_2" }, feedbackLocale: "uz", idempotencyKey: key });
+    expect(retried).toMatchObject({ submissionId: failed.submissionId, status: "COMPLETED" });
+    expect(await prisma.submission.count({ where: { userId: userA.id, idempotencyKey: key } })).toBe(1);
+  });
+
   it("creates submission with score, feedback, errors and raw AI evaluation", async () => {
     const result = await submitAndGradeEssay({
       userId: userA.id,

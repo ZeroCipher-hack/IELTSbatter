@@ -13,8 +13,8 @@ export async function POST(request: Request) {
     const session = await requireSession();
 
     if (
-      !rateLimit(`speaking-start:user:${session.userId}`, { limit: 20, windowMs: 60_000 }) ||
-      !rateLimit(`speaking-start:ip:${clientIp(request)}`, { limit: 40, windowMs: 60_000 })
+      !(await rateLimit(`speaking-start:user:${session.userId}`, { limit: 20, windowMs: 60_000 })) ||
+      !(await rateLimit(`speaking-start:ip:${clientIp(request)}`, { limit: 40, windowMs: 60_000 }))
     ) {
       return apiError(429, "rate_limited");
     }

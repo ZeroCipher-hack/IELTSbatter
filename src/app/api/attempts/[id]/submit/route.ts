@@ -17,8 +17,8 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
     const session = await requireSession();
 
     if (
-      !rateLimit(`submit-attempt:user:${session.userId}`, { limit: 30, windowMs: 60_000 }) ||
-      !rateLimit(`submit-attempt:ip:${clientIp(request)}`, { limit: 60, windowMs: 60_000 })
+      !(await rateLimit(`submit-attempt:user:${session.userId}`, { limit: 30, windowMs: 60_000 })) ||
+      !(await rateLimit(`submit-attempt:ip:${clientIp(request)}`, { limit: 60, windowMs: 60_000 }))
     ) {
       return apiError(429, "rate_limited");
     }

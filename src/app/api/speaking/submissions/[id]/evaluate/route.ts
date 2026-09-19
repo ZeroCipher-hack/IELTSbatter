@@ -20,7 +20,7 @@ export async function POST(request: Request, props: { params: Promise<{ id: stri
   try {
     const session = await requireSession();
 
-    if (!rateLimit(`speaking-eval:user:${session.userId}`, { limit: 10, windowMs: 60_000 })) {
+    if (!(await rateLimit(`speaking-eval:user:${session.userId}`, { limit: 10, windowMs: 60_000 }))) {
       return apiError(429, "rate_limited");
     }
 

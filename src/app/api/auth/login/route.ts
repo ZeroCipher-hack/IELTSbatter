@@ -12,7 +12,7 @@ const DUMMY_PASSWORD_HASH = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJ
 
 export async function POST(request: Request) {
   try {
-    if (!rateLimit(`login:${clientIp(request)}`, { limit: 15, windowMs: 60_000 })) {
+    if (!(await rateLimit(`login:${clientIp(request)}`, { limit: 15, windowMs: 60_000 }))) {
       return apiError(429, "rate_limited");
     }
 

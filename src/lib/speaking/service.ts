@@ -27,17 +27,24 @@ import { countWords } from "@/lib/utils/scoring";
 import type {
   PublicSpeakingTest,
   SpeakingPrompt,
+  SpeakingInterviewSnapshot,
   SpeakingTestSummary,
 } from "@/lib/speaking/types";
+import { decideBeginPart, timerRemaining } from "@/lib/speaking/state-machine";
 
 export type { PublicSpeakingTest, SpeakingPrompt, SpeakingTestSummary };
 
 export class SpeakingSubmissionStateError extends Error {
-  constructor(readonly code: "recording_already_uploaded" | "submission_not_editable" | "evaluation_in_progress") {
+  constructor(readonly code: "recording_already_uploaded" | "submission_not_editable" | "evaluation_in_progress" | "invalid_transition" | "timer_not_elapsed" | "interview_expired") {
     super(code);
     this.name = "SpeakingSubmissionStateError";
   }
 }
+
+const TERMINAL_INTERVIEW_STATES = ["COMPLETED", "FAILED"] as const;
+const TIMER_GRACE_SECONDS = 30;
+
+export type { SpeakingInterviewSnapshot } from "@/lib/speaking/types";
 
 /* ------------------------------------------------------------------ tests */
 
@@ -108,6 +115,126 @@ function numberOr(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }
 
+function promptForPart(test: PublicSpeakingTest, part: number): SpeakingPrompt | undefined {
+  return test.prompts.find((prompt) => prompt.part === part);
+}
+
+function timerFor(state: SpeakingInterviewSnapshot["state"], prompt: SpeakingPrompt): number {
+  return state === "PREPARING" ? prompt.preparationSeconds : prompt.speakingSeconds;
+}
+
+async function snapshotInterview(interview: {
+  id: string; submissionId: string; testId: string; state: SpeakingInterviewSnapshot["state"];
+  currentPart: number; currentPromptId: string; stateStartedAt: Date; failureReason: string | null;
+}, test: PublicSpeakingTest, now = new Date()): Promise<SpeakingInterviewSnapshot> {
+  const prompt = test.prompts.find((item) => item.id === interview.currentPromptId) ?? promptForPart(test, interview.currentPart);
+  const total = prompt && (interview.state === "PREPARING" || interview.state.startsWith("PART_"))
+    ? timerFor(interview.state, prompt)
+    : 0;
+  return {
+    ...interview,
+    stateStartedAt: interview.stateStartedAt.toISOString(),
+    serverNow: now.toISOString(),
+    remainingSeconds: timerRemaining(interview.stateStartedAt, total, now),
+  };
+}
+
+/** Create one interview, or recover the caller's existing non-terminal one. */
+export async function createOrResumeSpeakingInterview(params: {
+  userId: string; testId: string;
+}): Promise<SpeakingInterviewSnapshot | null> {
+  const test = await getPublicSpeakingTest(params.testId);
+  const firstPrompt = test && promptForPart(test, 1);
+  if (!test || !firstPrompt) return null;
+
+  let interview = await prisma.speakingInterview.findFirst({
+    where: { userId: params.userId, testId: params.testId, state: { notIn: [...TERMINAL_INTERVIEW_STATES] } },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!interview) {
+    try {
+      interview = await prisma.$transaction(async (tx) => {
+        const submission = await tx.submission.create({
+          data: {
+            userId: params.userId,
+            module: "SPEAKING",
+            testType: "SPEAKING_INTERVIEW",
+            question: test.prompts.map((prompt) => prompt.prompt).join("\n"),
+            essay: "",
+            wordCount: 0,
+            status: "PENDING",
+          },
+        });
+        return tx.speakingInterview.create({
+          data: {
+            userId: params.userId,
+            testId: params.testId,
+            submissionId: submission.id,
+            currentPromptId: firstPrompt.id,
+          },
+        });
+      });
+    } catch (error) {
+      // The partial unique index resolves simultaneous browser reconnects.
+      interview = await prisma.speakingInterview.findFirst({
+        where: { userId: params.userId, testId: params.testId, state: { notIn: [...TERMINAL_INTERVIEW_STATES] } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!interview) throw error;
+    }
+  }
+  return recoverSpeakingInterview(params.userId, interview.id, test);
+}
+
+/** Owner-scoped recovery; all timer calculations use persisted server time. */
+export async function recoverSpeakingInterview(
+  userId: string,
+  interviewId: string,
+  knownTest?: PublicSpeakingTest
+): Promise<SpeakingInterviewSnapshot | null> {
+  let interview = await prisma.speakingInterview.findFirst({ where: { id: interviewId, userId } });
+  if (!interview) return null;
+  const test = knownTest ?? await getPublicSpeakingTest(interview.testId);
+  if (!test) return null;
+  const now = Date.now();
+  const pipelineStale = ["UPLOADING", "TRANSCRIBING", "EVALUATING"].includes(interview.state)
+    && now - interview.stateStartedAt.getTime() > 5 * 60_000;
+  const interviewStale = !TERMINAL_INTERVIEW_STATES.includes(interview.state as "COMPLETED" | "FAILED")
+    && now - interview.startedAt.getTime() > 2 * 60 * 60_000;
+  if (pipelineStale || interviewStale) {
+    await markSpeakingFailed(interview.submissionId, interview.id, pipelineStale ? "pipeline_timeout" : "interview_timeout");
+    interview = await prisma.speakingInterview.findUniqueOrThrow({ where: { id: interview.id } });
+  }
+  const prompt = test.prompts.find((item) => item.id === interview!.currentPromptId);
+  if (prompt && interview.state.startsWith("PART_")) {
+    const elapsed = (Date.now() - interview.stateStartedAt.getTime()) / 1000;
+    if (elapsed > prompt.speakingSeconds + TIMER_GRACE_SECONDS) {
+      interview = await prisma.speakingInterview.update({
+        where: { id: interview.id },
+        data: { state: "FAILED", failureReason: "timer_expired", completedAt: new Date() },
+      });
+      await prisma.submission.update({ where: { id: interview.submissionId }, data: { status: "FAILED" } });
+    }
+  }
+  return snapshotInterview(interview, test);
+}
+
+export async function transitionSpeakingInterview(params: {
+  userId: string; interviewId: string; action: "BEGIN_PART";
+}): Promise<SpeakingInterviewSnapshot | null> {
+  const current = await recoverSpeakingInterview(params.userId, params.interviewId);
+  if (!current) return null;
+  const decision = decideBeginPart(current.state, current.currentPart, current.remainingSeconds);
+  if (decision.kind === "IDEMPOTENT") return current;
+  if (decision.kind === "REJECT") throw new SpeakingSubmissionStateError(decision.code);
+  const changed = await prisma.speakingInterview.updateMany({
+    where: { id: current.id, userId: params.userId, state: "PREPARING" },
+    data: { state: decision.next as "PART_1", stateStartedAt: new Date() },
+  });
+  if (changed.count === 0) return recoverSpeakingInterview(params.userId, current.id);
+  return recoverSpeakingInterview(params.userId, current.id);
+}
+
 /* ------------------------------------------------------------- submissions */
 
 /**
@@ -121,28 +248,13 @@ export async function createSpeakingSubmission(params: {
   promptId?: string | null;
 }): Promise<{ submissionId: string; prompt: SpeakingPrompt } | null> {
   const { userId, testId, promptId } = params;
-  await failStaleSpeakingSubmissions(userId);
   const test = await getPublicSpeakingTest(testId);
   if (!test || test.prompts.length === 0) return null;
-
-  const prompt = promptId ? test.prompts.find((p) => p.id === promptId) : test.prompts[0];
-  if (!prompt) return null;
-
-  const submission = await prisma.submission.create({
-    data: {
-      userId,
-      module: "SPEAKING",
-      testType: `SPEAKING_PART_${prompt.part}`,
-      question: prompt.isCueCard ? `${prompt.prompt}\n${prompt.bulletPoints.join("\n")}` : prompt.prompt,
-      // Filled in with the transcript once grading has run.
-      essay: "",
-      wordCount: 0,
-      status: "PENDING",
-    },
-    select: { id: true },
-  });
-
-  return { submissionId: submission.id, prompt };
+  const interview = await createOrResumeSpeakingInterview({ userId, testId });
+  if (!interview) return null;
+  const prompt = test.prompts.find((p) => p.id === interview.currentPromptId);
+  if (!prompt || (promptId && prompt.id !== promptId)) return null;
+  return { submissionId: interview.submissionId, prompt };
 }
 
 /**
@@ -157,8 +269,9 @@ export async function attachRecording(params: {
   data: Uint8Array;
   mimeType: string;
   durationSeconds?: number | null;
+  speakingPart: number;
 }): Promise<{ assetId: string; sizeBytes: number; mimeType: string } | null> {
-  const { userId, submissionId, data, mimeType, durationSeconds } = params;
+  const { userId, submissionId, data, mimeType, durationSeconds, speakingPart } = params;
 
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, userId, module: "SPEAKING" },
@@ -166,21 +279,35 @@ export async function attachRecording(params: {
       id: true,
       status: true,
       speakingResult: { select: { id: true } },
-      recordings: { select: { id: true }, take: 1 },
+      speakingInterview: true,
+      recordings: { select: { id: true, sizeBytes: true, mimeType: true, speakingPart: true } },
     },
   });
   if (!submission) return null;
-  if (submission.status !== "PENDING" || submission.speakingResult) {
+  if (submission.status !== "PENDING" || submission.speakingResult || !submission.speakingInterview) {
     throw new SpeakingSubmissionStateError("submission_not_editable");
   }
-  if (submission.recordings.length > 0) {
-    throw new SpeakingSubmissionStateError("recording_already_uploaded");
+  const interview = await recoverSpeakingInterview(userId, submission.speakingInterview.id);
+  if (!interview) return null;
+  const existing = submission.recordings.find((recording) => recording.speakingPart === speakingPart);
+  if (existing) {
+    return { assetId: existing.id, sizeBytes: existing.sizeBytes ?? 0, mimeType: existing.mimeType };
   }
+  if (interview.state === "FAILED") throw new SpeakingSubmissionStateError("interview_expired");
+  if (speakingPart !== interview.currentPart) throw new SpeakingSubmissionStateError("invalid_transition");
+  if (interview.state !== `PART_${interview.currentPart}`) {
+    throw new SpeakingSubmissionStateError("invalid_transition");
+  }
+  const claimed = await prisma.speakingInterview.updateMany({
+    where: { id: interview.id, userId, state: interview.state },
+    data: { state: "UPLOADING", stateStartedAt: new Date() },
+  });
+  if (claimed.count !== 1) throw new SpeakingSubmissionStateError("invalid_transition");
 
   const extension = extensionForMimeType(mimeType);
   const key = newStorageKey(`speaking/${userId}`, extension);
   const storage = getPrivateStorage();
-  const stored = await storage.save({ key, data, mimeType });
+  const stored = await storage.put({ key, data, mimeType });
 
   let asset: { id: string; sizeBytes: number | null; mimeType: string };
   try {
@@ -194,14 +321,34 @@ export async function attachRecording(params: {
         durationSeconds: durationSeconds ?? null,
         userId,
         submissionId,
+        speakingPart,
       },
       select: { id: true, sizeBytes: true, mimeType: true },
     });
   } catch (error) {
     // Do not leave an orphaned private file if the metadata write fails.
-    await storage.remove(stored.key).catch(() => undefined);
+    await storage.delete(stored.key).catch(() => undefined);
+    await prisma.speakingInterview.updateMany({
+      where: { id: interview.id, state: "UPLOADING" },
+      data: { state: interview.state, stateStartedAt: new Date() },
+    });
     throw error;
   }
+
+  const test = await getPublicSpeakingTest(interview.testId);
+  const nextPart = interview.currentPart + 1;
+  const nextPrompt = test && promptForPart(test, nextPart);
+  await prisma.speakingInterview.update({
+    where: { id: interview.id },
+    data: nextPrompt
+      ? {
+          state: "PREPARING",
+          currentPart: nextPart,
+          currentPromptId: nextPrompt.id,
+          stateStartedAt: new Date(),
+        }
+      : { state: "TRANSCRIBING", stateStartedAt: new Date() },
+  });
 
   return {
     assetId: asset.id,
@@ -242,8 +389,9 @@ export async function evaluateSpeakingSubmission(params: {
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, userId, module: "SPEAKING" },
     include: {
-      recordings: { orderBy: { createdAt: "desc" }, take: 1 },
+      recordings: { orderBy: [{ speakingPart: "asc" }, { createdAt: "asc" }] },
       speakingResult: true,
+      speakingInterview: true,
     },
   });
   if (!submission) return null;
@@ -260,49 +408,35 @@ export async function evaluateSpeakingSubmission(params: {
     };
   }
 
-  const recording = submission.recordings[0];
-  if (!recording) {
-    await prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: "FAILED", processingStartedAt: null },
-    });
+  if (!submission.speakingInterview || submission.recordings.length < 3) {
+    await markSpeakingFailed(submissionId, submission.speakingInterview?.id, "incomplete_recordings");
     return {
       submissionId,
       status: "FAILED",
       isMock: false,
       transcript: "",
       overall: 0,
-      reason: "no_recording",
+      reason: "incomplete_recordings",
     };
   }
-
-  const file = await getPrivateStorage().read(recording.storageKey);
-  if (!file) {
-    await prisma.submission.update({
-      where: { id: submissionId },
-      data: { status: "FAILED", processingStartedAt: null },
-    });
-    return {
-      submissionId,
-      status: "FAILED",
-      isMock: false,
-      transcript: "",
-      overall: 0,
-      reason: "recording_missing",
-    };
+  if (!["TRANSCRIBING", "FAILED"].includes(submission.speakingInterview.state)) {
+    throw new SpeakingSubmissionStateError("invalid_transition");
   }
 
   // Atomically claim evaluation. Parallel retries cannot call a provider twice.
-  const claimed = await prisma.submission.updateMany({
-    where: {
-      id: submissionId,
-      userId,
-      module: "SPEAKING",
-      status: { in: ["PENDING", "FAILED"] },
-    },
-    data: { status: "PROCESSING", processingStartedAt: new Date() },
+  const claimed = await prisma.$transaction(async (tx) => {
+    const interviewClaim = await tx.speakingInterview.updateMany({
+      where: { id: submission.speakingInterview!.id, state: { in: ["TRANSCRIBING", "FAILED"] } },
+      data: { state: "EVALUATING", failureReason: null, stateStartedAt: new Date() },
+    });
+    if (interviewClaim.count !== 1) return 0;
+    const submissionClaim = await tx.submission.updateMany({
+      where: { id: submissionId, userId, module: "SPEAKING", status: { in: ["PENDING", "FAILED"] } },
+      data: { status: "PROCESSING", processingStartedAt: new Date() },
+    });
+    return submissionClaim.count;
   });
-  if (claimed.count !== 1) {
+  if (claimed !== 1) {
     throw new SpeakingSubmissionStateError("evaluation_in_progress");
   }
 
@@ -317,19 +451,23 @@ export async function evaluateSpeakingSubmission(params: {
     const transcriber = getTranscriptionProvider();
     const grader = getSpeakingGrader();
     isMock = transcriber.isMock || grader.isMock || speakingPipelineIsMock();
-
-    const transcription = await transcriber.transcribe({
-      audio: file.data,
-      mimeType: recording.mimeType,
-      language: "en",
-    });
-    transcript = transcription.transcript;
-
-    if (transcription.empty || transcript.trim().length === 0) {
-      await prisma.submission.update({
-        where: { id: submissionId },
-        data: { status: "FAILED", processingStartedAt: null },
+    const transcripts: string[] = [];
+    for (const recording of submission.recordings) {
+      const file = await getPrivateStorage().get(recording.storageKey);
+      if (!file) throw new Error("recording_missing");
+      const transcription = await transcriber.transcribe({
+        audio: file.data,
+        mimeType: recording.mimeType,
+        language: "en",
       });
+      if (!transcription.empty && transcription.transcript.trim()) {
+        transcripts.push(`Part ${recording.speakingPart ?? transcripts.length + 1}: ${transcription.transcript.trim()}`);
+      }
+    }
+    transcript = transcripts.join("\n\n");
+
+    if (transcript.trim().length === 0) {
+      await markSpeakingFailed(submissionId, submission.speakingInterview.id, "empty_transcript");
       return {
         submissionId,
         status: "FAILED",
@@ -343,11 +481,15 @@ export async function evaluateSpeakingSubmission(params: {
     const grading: SpeakingGradingResult = await grader.gradeSpeaking({
       transcript,
       question: submission.question,
-      part: Number(submission.testType.replace("SPEAKING_PART_", "")) || null,
+      part: null,
       feedbackLocale,
     });
 
     await persistSpeakingResult({ submissionId, transcript, grading, transcriber, isMock });
+    await prisma.speakingInterview.update({
+      where: { id: submission.speakingInterview.id },
+      data: { state: "COMPLETED", completedAt: new Date(), failureReason: null },
+    });
 
     return {
       submissionId,
@@ -357,11 +499,6 @@ export async function evaluateSpeakingSubmission(params: {
       overall: grading.overallBand,
     };
   } catch (error) {
-    await prisma.submission.updateMany({
-      where: { id: submissionId, status: "PROCESSING" },
-      data: { status: "FAILED", processingStartedAt: null },
-    });
-
     const reason = sanitizeAiText(
       error instanceof SpeakingGradingError
         ? `${error.details.validationStatus}: ${error.details.reason}`
@@ -369,6 +506,7 @@ export async function evaluateSpeakingSubmission(params: {
           ? error.message
           : "unknown_error"
     );
+    await markSpeakingFailed(submissionId, submission.speakingInterview.id, reason);
 
     // Server-side log only; the API response stays generic.
     console.error(`[speaking] evaluation failed for submission ${submissionId}: ${reason}`);
@@ -382,6 +520,21 @@ export async function evaluateSpeakingSubmission(params: {
       reason,
     };
   }
+}
+
+async function markSpeakingFailed(submissionId: string, interviewId: string | undefined, reason: string) {
+  await prisma.$transaction([
+    prisma.submission.updateMany({
+      where: { id: submissionId, status: { not: "COMPLETED" } },
+      data: { status: "FAILED", processingStartedAt: null },
+    }),
+    ...(interviewId
+      ? [prisma.speakingInterview.updateMany({
+          where: { id: interviewId, state: { not: "COMPLETED" } },
+          data: { state: "FAILED", failureReason: reason.slice(0, 200), completedAt: new Date() },
+        })]
+      : []),
+  ]);
 }
 
 async function persistSpeakingResult(params: {
