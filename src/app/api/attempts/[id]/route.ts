@@ -1,13 +1,14 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/session";
 import { saveAnswersSchema } from "@/lib/validations/testing";
-import { getOwnAttempt, saveAnswers } from "@/lib/testing/service";
+import { getOwnAttempt, InvalidQuestionError, saveAnswers } from "@/lib/testing/service";
 import { apiError, handleApiError } from "@/lib/utils/api";
 
 export const dynamic = "force-dynamic";
 
 /** Owner-scoped attempt state (used to restore an in-progress attempt). */
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 
@@ -35,7 +36,8 @@ export async function GET(_request: Request, { params }: { params: { id: string 
 }
 
 /** Autosave answers while the attempt is in progress. */
-export async function PATCH(request: Request, { params }: { params: { id: string } }) {
+export async function PATCH(request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 
@@ -46,11 +48,20 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       responses: input.responses,
     });
 
-    // Unknown attempt, another user's attempt, or an already graded attempt.
-    if (!saved) return apiError(409, "attempt_not_editable");
+    if (!saved) {
+      // Preserve non-enumerating ownership semantics: foreign and missing IDs
+      // look identical, while the owner gets an actionable state conflict.
+      const ownAttempt = await getOwnAttempt(session.userId, params.id);
+      return ownAttempt
+        ? apiError(409, "attempt_not_editable")
+        : apiError(404, "attempt_not_found");
+    }
 
     return NextResponse.json({ saved: saved.saved });
   } catch (error) {
+    if (error instanceof InvalidQuestionError) {
+      return apiError(400, "invalid_question_id");
+    }
     return handleApiError(error);
   }
 }

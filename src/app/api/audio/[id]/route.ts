@@ -15,7 +15,8 @@ export const dynamic = "force-dynamic";
  *    but listing it here too keeps the route usable for any asset;
  *  - anonymous callers get 401, other users' recordings look like 404.
  */
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 
@@ -37,6 +38,7 @@ export async function GET(_request: Request, { params }: { params: { id: string 
         "Content-Length": String(file.data.byteLength),
         "Cache-Control": "private, max-age=0, no-store",
         "Content-Disposition": "inline",
+        "X-Content-Type-Options": "nosniff",
       },
     });
   } catch (error) {

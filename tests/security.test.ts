@@ -106,6 +106,25 @@ describe("secrets", () => {
       expect(example).toContain(`${key}=`);
     }
   });
+
+  it("does not log SMS verification codes or full phone numbers", () => {
+    const sms = read(path.join(SRC, "lib", "auth", "sms.ts"));
+    expect(sms).not.toMatch(/console\.(log|info|warn|error)/);
+    expect(sms).not.toContain("message=\"");
+    expect(sms).not.toContain("to=${phone}");
+  });
+
+  it("sets baseline browser security headers", () => {
+    const config = fs.readFileSync(path.join(ROOT, "next.config.mjs"), "utf8");
+    for (const header of [
+      "X-Content-Type-Options",
+      "X-Frame-Options",
+      "Referrer-Policy",
+      "Permissions-Policy",
+    ]) {
+      expect(config).toContain(header);
+    }
+  });
 });
 
 describe("data access", () => {

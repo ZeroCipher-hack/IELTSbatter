@@ -8,7 +8,7 @@ export async function POST(request: Request) {
   if (!SUPPORTED_LOCALES.includes(locale as AppLocale)) {
     return NextResponse.json({ error: { code: "invalid_locale" } }, { status: 400 });
   }
-  cookies().set(LOCALE_COOKIE, locale, {
+  (await cookies()).set(LOCALE_COOKIE, locale, {
     maxAge: 60 * 60 * 24 * 365,
     path: "/",
     sameSite: "lax",

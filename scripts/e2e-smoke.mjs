@@ -389,7 +389,7 @@ async function main() {
       method: "PATCH",
       body: { responses: {} },
     });
-    check("other user cannot modify a graded attempt (409)", foreignPatch.status === 409, `status ${foreignPatch.status}`);
+    check("other user cannot modify or enumerate an attempt (404)", foreignPatch.status === 404, `status ${foreignPatch.status}`);
 
     // Back to the original learner.
     jar.clear();
@@ -403,8 +403,8 @@ async function main() {
   section("8. DASHBOARD + HISTORY (all four modules)");
   {
     const html = await htmlOk("/dashboard", "dashboard (with data)", ["module-card-WRITING"]);
-    for (const module of ["WRITING", "READING", "LISTENING", "SPEAKING"]) {
-      check(`dashboard shows the ${module} card`, html.includes(`module-card-${module}`));
+    for (const moduleName of ["WRITING", "READING", "LISTENING", "SPEAKING"]) {
+      check(`dashboard shows the ${moduleName} card`, html.includes(`module-card-${moduleName}`));
     }
 
     const readingProgress = await prisma.testAttempt.findMany({

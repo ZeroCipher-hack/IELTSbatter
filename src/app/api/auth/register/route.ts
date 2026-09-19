@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { User } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { hashPassword } from "@/lib/auth/password";
 import { createSession } from "@/lib/auth/session";
@@ -20,13 +21,22 @@ export async function POST(request: Request) {
       return apiError(409, "phone_taken");
     }
 
-    const user = await prisma.user.create({
-      data: {
-        phone: input.phone,
-        name: input.name,
-        passwordHash: await hashPassword(input.password),
-      },
-    });
+    let user: User;
+    try {
+      user = await prisma.user.create({
+        data: {
+          phone: input.phone,
+          name: input.name,
+          passwordHash: await hashPassword(input.password),
+        },
+      });
+    } catch (error) {
+      // Close the check-then-create race: concurrent registration of the same
+      // phone must remain a safe 409, never an internal error.
+      const raced = await prisma.user.findUnique({ where: { phone: input.phone }, select: { id: true } });
+      if (raced) return apiError(409, "phone_taken");
+      throw error;
+    }
 
     await createSession({ userId: user.id, role: user.role });
 

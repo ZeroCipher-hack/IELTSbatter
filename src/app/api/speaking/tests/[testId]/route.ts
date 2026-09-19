@@ -6,7 +6,8 @@ import { apiError, handleApiError } from "@/lib/utils/api";
 export const dynamic = "force-dynamic";
 
 /** One speaking test: parts, prompts and timers. Contains no answer keys. */
-export async function GET(_request: Request, { params }: { params: { testId: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ testId: string }> }) {
+  const params = await props.params;
   try {
     await requireSession();
     const test = await getPublicSpeakingTest(params.testId);

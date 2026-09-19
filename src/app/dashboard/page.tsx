@@ -34,9 +34,12 @@ export default async function DashboardPage() {
   const writingBands = stats.history.map((entry) => entry.overall);
   const writingLatest = writingBands.length ? writingBands[writingBands.length - 1] : null;
   const writingPrevious = writingBands.length > 1 ? writingBands[writingBands.length - 2] : null;
-  const latestWritingResult = [...submissions]
-    .reverse()
-    .find((s) => s.status === "COMPLETED" && s.score)?.id;
+  // listOwnSubmissions is newest-first; reversing here used to label the oldest
+  // result as "latest".
+  const latestWritingSubmission = submissions.find(
+    (s) => s.status === "COMPLETED" && s.score
+  );
+  const latestWritingResult = latestWritingSubmission?.id;
 
   const overviewItems: ModuleOverviewItem[] = [
     {
@@ -47,6 +50,7 @@ export default async function DashboardPage() {
       bestBand: writingBands.length ? Math.max(...writingBands) : null,
       attempts: stats.essaysSubmitted,
       latestResultHref: latestWritingResult ? `/writing/result/${latestWritingResult}` : null,
+      isMock: latestWritingSubmission?.aiEvaluations[0]?.provider === "mock",
     },
     {
       module: "READING",

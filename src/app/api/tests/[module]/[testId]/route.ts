@@ -11,7 +11,11 @@ export const dynamic = "force-dynamic";
  * Correct answers and explanations are stripped server-side and are revealed
  * only after the attempt has been graded.
  */
-export async function GET(_request: Request, { params }: { params: { module: string; testId: string } }) {
+export async function GET(
+  _request: Request,
+  props: { params: Promise<{ module: string; testId: string }> }
+) {
+  const params = await props.params;
   try {
     await requireSession();
 

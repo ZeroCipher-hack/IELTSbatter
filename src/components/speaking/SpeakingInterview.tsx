@@ -48,42 +48,44 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
   const streamRef = useRef<MediaStream | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Reset the prompt-specific state when the learner switches prompts.
-  useEffect(() => {
-    setPhase("idle");
-    setPrepLeft(activePrompt?.preparationSeconds ?? 0);
-    setSpeakLeft(activePrompt?.speakingSeconds ?? 0);
-    setErrorKey(null);
-    if (recordingUrl) URL.revokeObjectURL(recordingUrl);
-    setRecordingUrl(null);
-    blobRef.current = null;
-    setRecordingSize(0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeId]);
+  const stopRecording = useCallback(() => {
+    if (stopTimerRef.current) {
+      clearTimeout(stopTimerRef.current);
+      stopTimerRef.current = null;
+    }
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }, []);
 
   /* --------------------------------------------------------------- timers */
 
   useEffect(() => {
     if (phase !== "preparing") return;
-    if (prepLeft <= 0) {
-      // Preparation over — the learner starts the recording when ready.
-      setPhase("idle");
-      return;
-    }
-    const timer = setTimeout(() => setPrepLeft((value) => value - 1), 1000);
+    const timer = setTimeout(() => {
+      setPrepLeft((value) => {
+        if (value <= 1) {
+          setPhase("idle");
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
     return () => clearTimeout(timer);
   }, [phase, prepLeft]);
 
   useEffect(() => {
     if (phase !== "recording") return;
-    if (speakLeft <= 0) {
-      stopRecording();
-      return;
-    }
-    const timer = setTimeout(() => setSpeakLeft((value) => value - 1), 1000);
+    const timer = setTimeout(() => {
+      setSpeakLeft((value) => {
+        if (value <= 1) {
+          stopRecording();
+          return 0;
+        }
+        return value - 1;
+      });
+    }, 1000);
     return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [phase, speakLeft]);
+  }, [phase, speakLeft, stopRecording]);
 
   useEffect(() => {
     return () => {
@@ -95,15 +97,6 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
   }, []);
 
   /* ------------------------------------------------------------ recording */
-
-  const stopRecording = useCallback(() => {
-    if (stopTimerRef.current) {
-      clearTimeout(stopTimerRef.current);
-      stopTimerRef.current = null;
-    }
-    const recorder = recorderRef.current;
-    if (recorder && recorder.state !== "inactive") recorder.stop();
-  }, []);
 
   const startRecording = useCallback(async () => {
     if (!activePrompt) return;
@@ -169,6 +162,21 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
       (activePrompt.speakingSeconds + 2) * 1000
     );
   }, [activePrompt, stopRecording]);
+
+  function switchPrompt(prompt: SpeakingPrompt) {
+    if (["preparing", "recording", "uploading", "evaluating"].includes(phase)) return;
+    setActiveId(prompt.id);
+    setPhase("idle");
+    setPrepLeft(prompt.preparationSeconds);
+    setSpeakLeft(prompt.speakingSeconds);
+    setErrorKey(null);
+    setRecordingUrl((previous) => {
+      if (previous) URL.revokeObjectURL(previous);
+      return null;
+    });
+    blobRef.current = null;
+    setRecordingSize(0);
+  }
 
   /* -------------------------------------------------------------- submit */
 
@@ -347,11 +355,12 @@ export function SpeakingInterview({ test, initialPromptId, locale }: SpeakingInt
               <li key={prompt.id}>
                 <button
                   type="button"
-                  onClick={() => setActiveId(prompt.id)}
+                  onClick={() => switchPrompt(prompt)}
+                  disabled={["preparing", "recording", "uploading", "evaluating"].includes(phase)}
                   className={`w-full rounded-lg border px-3 py-2 text-left text-xs transition-colors ${
                     prompt.id === activeId
                       ? "border-brand-500 bg-brand-50 text-brand-800"
-                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50"
+                      : "border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
                   }`}
                 >
                   <span className="font-semibold">{t("promptNumber", { number: prompt.number })}</span>

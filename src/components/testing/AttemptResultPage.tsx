@@ -28,7 +28,7 @@ export async function AttemptResultPage({
 
   const t = await getTranslations("testing");
   const result = await getOwnAttemptResult(session.userId, attemptId);
-  if (!result) notFound();
+  if (!result || result.module !== module) notFound();
 
   const feedback = buildObjectiveFeedback(result);
   const missed = result.review.filter((item) => !item.isCorrect);

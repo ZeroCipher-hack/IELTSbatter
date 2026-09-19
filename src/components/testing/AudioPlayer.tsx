@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 
 interface AudioPlayerProps {
@@ -22,13 +22,6 @@ export function AudioPlayer({ src, durationSeconds, title }: AudioPlayerProps) {
   const [total, setTotal] = useState(durationSeconds ?? 0);
   const [plays, setPlays] = useState(0);
   const [error, setError] = useState(false);
-
-  useEffect(() => {
-    setPlaying(false);
-    setCurrent(0);
-    setTotal(durationSeconds ?? 0);
-    setError(false);
-  }, [src, durationSeconds]);
 
   function toggle() {
     const audio = audioRef.current;

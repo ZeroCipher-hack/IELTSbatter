@@ -190,20 +190,29 @@ describe("attempt lifecycle", () => {
     expect(stored!.answers.filter((a) => a.isCorrect)).toHaveLength(2);
   });
 
-  it("ignores question ids that do not belong to the test", async () => {
+  it("reuses the same in-progress attempt on duplicate starts", async () => {
+    const first = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
+    const second = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
+    expect(second?.attemptId).toBe(first?.attemptId);
+    await submitAttempt({ userId: userA.id, attemptId: first!.attemptId, responses: {} });
+  });
+
+  it("rejects question ids that do not belong to the test without writing them", async () => {
     const started = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
-    const saved = await saveAnswers({
-      userId: userA.id,
-      attemptId: started!.attemptId,
-      responses: { "not-a-real-question": "x", [questionIds[0]]: "B" },
-    });
-    expect(saved?.saved).toBe(1);
+    await expect(
+      saveAnswers({
+        userId: userA.id,
+        attemptId: started!.attemptId,
+        responses: { "not-a-real-question": "x", [questionIds[0]]: "B" },
+      })
+    ).rejects.toMatchObject({ message: "invalid_question_id" });
 
     const attempt = await prisma.testAttempt.findUnique({
       where: { id: started!.attemptId },
       include: { answers: true },
     });
-    expect(attempt!.answers).toHaveLength(1);
+    expect(attempt!.answers).toHaveLength(0);
+    await submitAttempt({ userId: userA.id, attemptId: started!.attemptId, responses: {} });
   });
 
   it("does not let answers be changed after grading", async () => {
@@ -220,6 +229,58 @@ describe("attempt lifecycle", () => {
       responses: { [questionIds[0]]: "A" },
     });
     expect(late).toBeNull();
+  });
+
+  it("does not reveal the answer key before grading", async () => {
+    const started = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
+    expect(await getOwnAttemptResult(userA.id, started!.attemptId)).toBeNull();
+    await submitAttempt({ userId: userA.id, attemptId: started!.attemptId, responses: {} });
+  });
+
+  it("makes duplicate submit idempotent and keeps the original score", async () => {
+    const started = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
+    const first = await submitAttempt({
+      userId: userA.id,
+      attemptId: started!.attemptId,
+      responses: { [questionIds[0]]: "B" },
+    });
+    const retry = await submitAttempt({
+      userId: userA.id,
+      attemptId: started!.attemptId,
+      responses: { [questionIds[0]]: "A" },
+    });
+    expect(retry).toEqual(first);
+    const stored = await prisma.testAnswer.findUnique({
+      where: { attemptId_questionId: { attemptId: started!.attemptId, questionId: questionIds[0] } },
+    });
+    expect(stored?.response).toBe("B");
+    expect(stored?.isCorrect).toBe(true);
+  });
+
+  it("rejects late autosave and ignores client answers submitted after server expiry", async () => {
+    const started = await startAttempt({ userId: userA.id, testId: readingTestId, module: "READING" });
+    await saveAnswers({
+      userId: userA.id,
+      attemptId: started!.attemptId,
+      responses: { [questionIds[0]]: "B" },
+    });
+    await prisma.testAttempt.update({
+      where: { id: started!.attemptId },
+      data: { startedAt: new Date(Date.now() - 11 * 60_000) },
+    });
+    expect(
+      await saveAnswers({
+        userId: userA.id,
+        attemptId: started!.attemptId,
+        responses: { [questionIds[0]]: "A" },
+      })
+    ).toBeNull();
+    const result = await submitAttempt({
+      userId: userA.id,
+      attemptId: started!.attemptId,
+      responses: { [questionIds[0]]: "A" },
+    });
+    expect(result?.correctCount).toBe(1);
   });
 
   it("keeps a failed attempt out of the dashboard history", async () => {

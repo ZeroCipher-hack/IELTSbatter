@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/session";
-import { evaluateSpeakingSubmission } from "@/lib/speaking/service";
+import { evaluateSpeakingSubmission, SpeakingSubmissionStateError } from "@/lib/speaking/service";
 import { evaluateSpeakingSchema } from "@/lib/validations/speaking";
 import { apiError, handleApiError } from "@/lib/utils/api";
 import { rateLimit } from "@/lib/utils/rate-limit";
@@ -15,7 +15,8 @@ export const maxDuration = 120; // transcription + grading can take a while
  * isMock=true and shown as MOCK. Real providers are configured later through
  * environment variables only — nothing in this route touches the API key.
  */
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 
@@ -23,7 +24,8 @@ export async function POST(request: Request, { params }: { params: { id: string 
       return apiError(429, "rate_limited");
     }
 
-    const body = await request.json().catch(() => ({}));
+    const rawBody = await request.text();
+    const body = rawBody.trim() ? JSON.parse(rawBody) : {};
     const input = evaluateSpeakingSchema.parse(body);
 
     const result = await evaluateSpeakingSubmission({
@@ -51,6 +53,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
       overall: result.overall,
     });
   } catch (error) {
+    if (error instanceof SpeakingSubmissionStateError) {
+      return apiError(409, error.code);
+    }
     return handleApiError(error);
   }
 }

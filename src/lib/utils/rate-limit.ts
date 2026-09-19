@@ -10,6 +10,7 @@ interface Bucket {
 }
 
 const buckets = new Map<string, Bucket>();
+const MAX_BUCKETS = 10_000;
 
 export interface RateLimitOptions {
   /** Max requests allowed within the window. */
@@ -20,6 +21,12 @@ export interface RateLimitOptions {
 
 export function rateLimit(key: string, options: RateLimitOptions): boolean {
   const now = Date.now();
+  if (!buckets.has(key) && buckets.size >= MAX_BUCKETS) {
+    pruneExpiredBuckets(now, options.windowMs);
+    // Never let attacker-controlled IP/header cardinality grow memory without
+    // bound. Existing buckets continue to work; new identities are throttled.
+    if (buckets.size >= MAX_BUCKETS) return false;
+  }
   const bucket = buckets.get(key) ?? { timestamps: [] };
   bucket.timestamps = bucket.timestamps.filter((t) => now - t < options.windowMs);
 
@@ -31,11 +38,17 @@ export function rateLimit(key: string, options: RateLimitOptions): boolean {
   bucket.timestamps.push(now);
   buckets.set(key, bucket);
 
-  // Opportunistic cleanup to keep memory bounded.
-  if (buckets.size > 10_000) {
-    buckets.forEach((b, k) => {
-      if (b.timestamps.every((t) => now - t >= options.windowMs)) buckets.delete(k);
-    });
-  }
   return true;
+}
+
+function pruneExpiredBuckets(now: number, windowMs: number): void {
+  buckets.forEach((bucket, bucketKey) => {
+    if (bucket.timestamps.every((timestamp) => now - timestamp >= windowMs)) {
+      buckets.delete(bucketKey);
+    }
+  });
+}
+
+export function resetRateLimitsForTesting(): void {
+  buckets.clear();
 }

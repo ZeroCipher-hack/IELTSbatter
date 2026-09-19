@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth/session";
-import { attachRecording } from "@/lib/speaking/service";
-import { baseMimeType, isAllowedAudioMimeType } from "@/lib/validations/speaking";
+import { attachRecording, SpeakingSubmissionStateError } from "@/lib/speaking/service";
+import {
+  baseMimeType,
+  hasValidAudioSignature,
+  isAllowedAudioMimeType,
+} from "@/lib/validations/speaking";
 import { env } from "@/lib/env";
 import { apiError, handleApiError, clientIp } from "@/lib/utils/api";
 import { rateLimit } from "@/lib/utils/rate-limit";
@@ -14,7 +18,8 @@ export const dynamic = "force-dynamic";
  * The bytes go to private storage; the database only keeps a reference
  * (AudioAsset). The recording is never embedded in the database.
  */
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 
@@ -43,10 +48,17 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const durationRaw = form.get("durationSeconds");
-    const durationSeconds =
-      typeof durationRaw === "string" && Number.isFinite(Number(durationRaw))
-        ? Math.max(0, Math.round(Number(durationRaw)))
-        : null;
+    let durationSeconds: number | null = null;
+    if (durationRaw != null) {
+      if (
+        typeof durationRaw !== "string" ||
+        !Number.isFinite(Number(durationRaw)) ||
+        Number(durationRaw) < 0
+      ) {
+        return apiError(400, "invalid_audio_duration");
+      }
+      durationSeconds = Math.round(Number(durationRaw));
+    }
 
     if (
       durationSeconds != null &&
@@ -56,6 +68,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
+    if (!hasValidAudioSignature(buffer, mimeType)) {
+      return apiError(415, "invalid_audio_content");
+    }
 
     const stored = await attachRecording({
       userId: session.userId,
@@ -69,6 +84,9 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
     return NextResponse.json({ audio: stored }, { status: 201 });
   } catch (error) {
+    if (error instanceof SpeakingSubmissionStateError) {
+      return apiError(409, error.code);
+    }
     return handleApiError(error);
   }
 }

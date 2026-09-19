@@ -23,7 +23,7 @@ export async function createSession(payload: SessionPayload): Promise<void> {
     .setExpirationTime(`${SESSION_TTL_SECONDS}s`)
     .sign(secretKey());
 
-  cookies().set(COOKIE_NAME, token, {
+  (await cookies()).set(COOKIE_NAME, token, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -33,7 +33,7 @@ export async function createSession(payload: SessionPayload): Promise<void> {
 }
 
 export async function getSession(): Promise<SessionPayload | null> {
-  const token = cookies().get(COOKIE_NAME)?.value;
+  const token = (await cookies()).get(COOKIE_NAME)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secretKey());
@@ -44,8 +44,8 @@ export async function getSession(): Promise<SessionPayload | null> {
   }
 }
 
-export function destroySession(): void {
-  cookies().delete(COOKIE_NAME);
+export async function destroySession(): Promise<void> {
+  (await cookies()).delete(COOKIE_NAME);
 }
 
 /** For API routes: returns session or throws a 401-style error object. */

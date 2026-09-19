@@ -48,7 +48,6 @@ export function TestRunner({ module, test, attemptId, startedAt, initialResponse
 
   const dirtyIds = useRef<Set<string>>(new Set());
   const responsesRef = useRef(responses);
-  responsesRef.current = responses;
 
   /* ------------------------------------------------------------- autosave */
 
@@ -80,7 +79,11 @@ export function TestRunner({ module, test, attemptId, startedAt, initialResponse
 
   const updateAnswer = useCallback(
     (questionId: string, value: AnswerValue) => {
-      setResponses((prev) => ({ ...prev, [questionId]: value }));
+      setResponses((prev) => {
+        const next = { ...prev, [questionId]: value };
+        responsesRef.current = next;
+        return next;
+      });
       dirtyIds.current.add(questionId);
       if (scheduleAutosave.current) clearTimeout(scheduleAutosave.current);
       scheduleAutosave.current = setTimeout(() => {
@@ -209,6 +212,7 @@ export function TestRunner({ module, test, attemptId, startedAt, initialResponse
           {module === "LISTENING" && current.section.audioUrl && (
             <div className="mt-3">
               <AudioPlayer
+                key={current.section.audioUrl}
                 src={current.section.audioUrl}
                 durationSeconds={current.section.audioDurationSeconds}
                 title={current.section.title}

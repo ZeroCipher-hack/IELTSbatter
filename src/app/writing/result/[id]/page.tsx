@@ -9,7 +9,8 @@ import { getOwnSubmission } from "@/lib/writing/service";
 
 const CATEGORY_KEYS = ["grammar", "vocabulary", "spelling", "punctuation", "style", "coherence"] as const;
 
-export default async function ResultPage({ params }: { params: { id: string } }) {
+export default async function ResultPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -19,6 +20,7 @@ export default async function ResultPage({ params }: { params: { id: string } })
   if (!submission || !submission.score || !submission.feedback) notFound();
 
   const { score, feedback, errors } = submission;
+  const isMock = submission.aiEvaluations[0]?.provider === "mock";
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -41,6 +43,13 @@ export default async function ResultPage({ params }: { params: { id: string } })
             </Link>
           </div>
         </div>
+
+        {isMock && (
+          <div className="mt-6 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <p className="font-semibold uppercase tracking-wide">{t("mockBadge")}</p>
+            <p className="mt-1">{t("mockNotice")}</p>
+          </div>
+        )}
 
         {/* Overall */}
         <Card className="mt-6 flex flex-col items-center py-10">

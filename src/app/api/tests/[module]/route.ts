@@ -7,7 +7,8 @@ import { apiError, handleApiError } from "@/lib/utils/api";
 export const dynamic = "force-dynamic";
 
 /** Published test catalog for a module. Tests themselves are learner-safe. */
-export async function GET(_request: Request, { params }: { params: { module: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ module: string }> }) {
+  const params = await props.params;
   try {
     await requireSession();
 

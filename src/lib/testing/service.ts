@@ -45,6 +45,28 @@ const MODULE_DEFAULT_DURATION: Record<ObjectiveModule, number> = {
   LISTENING: 40,
 };
 
+export class AttemptStateError extends Error {
+  constructor(readonly code: "attempt_not_editable" | "attempt_processing") {
+    super(code);
+    this.name = "AttemptStateError";
+  }
+}
+
+export class InvalidQuestionError extends Error {
+  constructor() {
+    super("invalid_question_id");
+    this.name = "InvalidQuestionError";
+  }
+}
+
+function durationSecondsFor(module: ObjectiveModule, durationMinutes: number): number {
+  return (durationMinutes || MODULE_DEFAULT_DURATION[module]) * 60;
+}
+
+function attemptExpired(startedAt: Date, module: ObjectiveModule, durationMinutes: number): boolean {
+  return Date.now() - startedAt.getTime() >= durationSecondsFor(module, durationMinutes) * 1000;
+}
+
 /* ---------------------------------------------------------------- catalog */
 
 export interface TestSummary {
@@ -147,19 +169,8 @@ export async function startAttempt(params: {
   testId: string;
   module: ObjectiveModule;
 }): Promise<{ attemptId: string } | null> {
-  const { userId, testId, module } = params;
-
-  const test = await prisma.test.findFirst({
-    where: { id: testId, module, isPublished: true },
-    select: { id: true, module: true },
-  });
-  if (!test) return null;
-
-  const attempt = await prisma.testAttempt.create({
-    data: { userId, testId: test.id, module, status: "IN_PROGRESS" },
-    select: { id: true },
-  });
-  return { attemptId: attempt.id };
+  const attempt = await ensureAttempt(params);
+  return attempt ? { attemptId: attempt.attemptId } : null;
 }
 
 /**
@@ -189,6 +200,17 @@ export async function ensureAttempt(params: {
     where: { userId, testId, status: "IN_PROGRESS", startedAt: { lt: staleBefore } },
     data: { status: "FAILED" },
   });
+  // A process crash after an attempt was claimed for grading must not leave it
+  // in SUBMITTED forever. Normal grading is synchronous and finishes quickly.
+  await prisma.testAttempt.updateMany({
+    where: {
+      userId,
+      testId,
+      status: "SUBMITTED",
+      submittedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+    },
+    data: { status: "FAILED" },
+  });
 
   const existing = await prisma.testAttempt.findFirst({
     where: { userId, testId, status: "IN_PROGRESS" },
@@ -197,11 +219,24 @@ export async function ensureAttempt(params: {
   });
   if (existing) return { attemptId: existing.id, startedAt: existing.startedAt };
 
-  const created = await prisma.testAttempt.create({
-    data: { userId, testId, module, status: "IN_PROGRESS" },
-    select: { id: true, startedAt: true },
-  });
-  return { attemptId: created.id, startedAt: created.startedAt };
+  try {
+    const created = await prisma.testAttempt.create({
+      data: { userId, testId, module, status: "IN_PROGRESS" },
+      select: { id: true, startedAt: true },
+    });
+    return { attemptId: created.id, startedAt: created.startedAt };
+  } catch (error) {
+    // A partial unique index protects against two concurrent start requests.
+    // If the other request won, return its attempt; otherwise keep the real
+    // database error visible.
+    const raced = await prisma.testAttempt.findFirst({
+      where: { userId, testId, status: "IN_PROGRESS" },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, startedAt: true },
+    });
+    if (raced) return { attemptId: raced.id, startedAt: raced.startedAt };
+    throw error;
+  }
 }
 
 /** Ownership-scoped attempt lookup. */
@@ -231,12 +266,18 @@ export async function saveAnswers(params: {
     include: { test: { include: { sections: { include: { questions: { select: { id: true } } } } } } },
   });
   if (!attempt || attempt.status !== "IN_PROGRESS") return null;
+  if (attemptExpired(attempt.startedAt, attempt.module as ObjectiveModule, attempt.test.durationMinutes)) {
+    return null;
+  }
 
   const validQuestionIds = new Set(
     attempt.test.sections.flatMap((section) => section.questions.map((q) => q.id))
   );
 
   const entries = Object.entries(responses).filter(([questionId]) => validQuestionIds.has(questionId));
+  if (entries.length !== Object.keys(responses).length) {
+    throw new InvalidQuestionError();
+  }
 
   await prisma.$transaction(
     entries.map(([questionId, value]) =>
@@ -293,6 +334,41 @@ export async function submitAttempt(params: {
   });
   if (!attempt) return null;
 
+  if (attempt.status === "GRADED") {
+    return existingSubmissionResult(attempt);
+  }
+  if (attempt.status !== "IN_PROGRESS") {
+    throw new AttemptStateError(attempt.status === "SUBMITTED" ? "attempt_processing" : "attempt_not_editable");
+  }
+
+  if (responses) {
+    const validQuestionIds = new Set(
+      attempt.test.sections.flatMap((section) => section.questions.map((question) => question.id))
+    );
+    if (Object.keys(responses).some((questionId) => !validQuestionIds.has(questionId))) {
+      throw new InvalidQuestionError();
+    }
+  }
+
+  // Atomically claim the attempt. Concurrent/double submit requests cannot
+  // both rewrite answers or change an already final score.
+  const submittedAt = new Date();
+  const claim = await prisma.testAttempt.updateMany({
+    where: { id: attemptId, userId, status: "IN_PROGRESS" },
+    data: { status: "SUBMITTED", submittedAt },
+  });
+  if (claim.count !== 1) {
+    const current = await prisma.testAttempt.findFirst({
+      where: { id: attemptId, userId },
+      include: {
+        answers: true,
+        test: { include: { sections: { include: { questions: true } } } },
+      },
+    });
+    if (current?.status === "GRADED") return existingSubmissionResult(current);
+    throw new AttemptStateError("attempt_processing");
+  }
+
   // `module` is a reserved name in the Next.js lint config, hence testModule.
   const testModule = attempt.module as ObjectiveModule;
 
@@ -316,7 +392,14 @@ export async function submitAttempt(params: {
   for (const answer of attempt.answers) {
     merged[answer.questionId] = answer.response as string | string[] | null;
   }
-  if (responses) {
+  const expired = attemptExpired(
+    attempt.startedAt,
+    testModule,
+    attempt.test.durationMinutes
+  );
+  // Once server time has expired, only answers already accepted by autosave
+  // are graded. A manipulated client cannot extend the exam with late answers.
+  if (responses && !expired) {
     for (const [questionId, value] of Object.entries(responses)) {
       merged[questionId] = value;
     }
@@ -329,13 +412,13 @@ export async function submitAttempt(params: {
     bandTable: bandTableFor(testModule),
   });
 
-  const submittedAt = new Date();
   const startedAt = attempt.startedAt;
   const timeSpentSeconds = Math.max(0, Math.round((submittedAt.getTime() - startedAt.getTime()) / 1000));
   const durationLimitSeconds =
     (attempt.test.durationMinutes || MODULE_DEFAULT_DURATION[testModule]) * 60;
 
-  await prisma.$transaction([
+  try {
+    await prisma.$transaction([
     // Persist the graded answers (response + outcome) for the result page.
     ...scored.perQuestion.map((item) =>
       prisma.testAnswer.upsert({
@@ -365,7 +448,14 @@ export async function submitAttempt(params: {
         band: scored.band,
       },
     }),
-  ]);
+    ]);
+  } catch (error) {
+    await prisma.testAttempt.updateMany({
+      where: { id: attemptId, userId, status: "SUBMITTED" },
+      data: { status: "FAILED" },
+    });
+    throw error;
+  }
 
   return {
     attemptId,
@@ -377,6 +467,31 @@ export async function submitAttempt(params: {
     band: scored.band,
     percentage: scored.percentage,
     timeSpentSeconds: Math.min(timeSpentSeconds, durationLimitSeconds),
+  };
+}
+
+function existingSubmissionResult(attempt: {
+  id: string;
+  status: string;
+  rawScore: number | null;
+  maxScore: number | null;
+  band: number | null;
+  timeSpentSeconds: number | null;
+  answers: Array<{ isCorrect: boolean | null }>;
+  test: { sections: Array<{ questions: Array<unknown> }> };
+}): AttemptSubmissionResult {
+  const totalQuestions = attempt.test.sections.reduce((sum, section) => sum + section.questions.length, 0);
+  const correctCount = attempt.answers.filter((answer) => answer.isCorrect === true).length;
+  return {
+    attemptId: attempt.id,
+    status: "GRADED",
+    rawScore: attempt.rawScore ?? 0,
+    maxScore: attempt.maxScore ?? totalQuestions,
+    totalQuestions,
+    correctCount,
+    band: attempt.band ?? 0,
+    percentage: totalQuestions ? Math.round((correctCount / totalQuestions) * 100) : 0,
+    timeSpentSeconds: attempt.timeSpentSeconds,
   };
 }
 
@@ -437,7 +552,7 @@ export async function getOwnAttemptResult(
       },
     },
   });
-  if (!attempt) return null;
+  if (!attempt || attempt.status !== "GRADED") return null;
 
   const testModule = attempt.module as ObjectiveModule;
   const answered = new Map(attempt.answers.map((a) => [a.questionId, a]));

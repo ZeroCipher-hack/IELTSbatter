@@ -134,6 +134,8 @@
     "backToDashboard": "Kabinetga qaytish",
     "writeAnother": "Yana essay yozish",
     "notFound": "Natija topilmadi",
+    "mockBadge": "MOCK",
+    "mockNotice": "Bu natija sinov uchun MOCK baholovchi tomonidan yaratildi va haqiqiy IELTS yoki AI bahosi emas.",
     "categories": {
       "grammar": "Grammatika",
       "vocabulary": "Lug'at",
@@ -165,6 +167,7 @@
     "writeEssay": "Essay yozish",
     "status": {
       "PENDING": "Baholanmoqda",
+      "PROCESSING": "Baholanmoqda",
       "COMPLETED": "Tayyor",
       "FAILED": "Xatolik"
     },
@@ -339,6 +342,7 @@
     },
     "status": {
       "PENDING": "Baholanmoqda",
+      "PROCESSING": "Baholanmoqda",
       "COMPLETED": "Tayyor",
       "FAILED": "Xatolik"
     },
@@ -354,6 +358,7 @@
       "weaknesses": "Zaif tomonlar",
       "improvements": "Tavsiyalar",
       "transcript": "Transkript",
+      "pronunciationNotice": "Pronunciation balli hozircha faqat transkript asosidagi taxmin; audio talaffuzi bevosita tahlil qilinmaydi.",
       "audioPrivate": "Yozuv faqat sizga ko'rinadi (egalik tekshiruvi serverda).",
       "retry": "Yana bir marta ishlash"
     }

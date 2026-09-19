@@ -21,6 +21,7 @@ import {
   type SpeakingGradingResult,
 } from "@/lib/ai/speaking";
 import { SpeakingGradingError } from "@/lib/ai/speaking/types";
+import { sanitizeAiText } from "@/lib/ai/sanitize";
 import { getPrivateStorage, newStorageKey, extensionForMimeType } from "@/lib/storage";
 import { countWords } from "@/lib/utils/scoring";
 import type {
@@ -30,6 +31,13 @@ import type {
 } from "@/lib/speaking/types";
 
 export type { PublicSpeakingTest, SpeakingPrompt, SpeakingTestSummary };
+
+export class SpeakingSubmissionStateError extends Error {
+  constructor(readonly code: "recording_already_uploaded" | "submission_not_editable" | "evaluation_in_progress") {
+    super(code);
+    this.name = "SpeakingSubmissionStateError";
+  }
+}
 
 /* ------------------------------------------------------------------ tests */
 
@@ -113,10 +121,12 @@ export async function createSpeakingSubmission(params: {
   promptId?: string | null;
 }): Promise<{ submissionId: string; prompt: SpeakingPrompt } | null> {
   const { userId, testId, promptId } = params;
+  await failStaleSpeakingSubmissions(userId);
   const test = await getPublicSpeakingTest(testId);
   if (!test || test.prompts.length === 0) return null;
 
-  const prompt = promptId ? test.prompts.find((p) => p.id === promptId) ?? test.prompts[0] : test.prompts[0];
+  const prompt = promptId ? test.prompts.find((p) => p.id === promptId) : test.prompts[0];
+  if (!prompt) return null;
 
   const submission = await prisma.submission.create({
     data: {
@@ -152,27 +162,46 @@ export async function attachRecording(params: {
 
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, userId, module: "SPEAKING" },
-    select: { id: true },
+    select: {
+      id: true,
+      status: true,
+      speakingResult: { select: { id: true } },
+      recordings: { select: { id: true }, take: 1 },
+    },
   });
   if (!submission) return null;
+  if (submission.status !== "PENDING" || submission.speakingResult) {
+    throw new SpeakingSubmissionStateError("submission_not_editable");
+  }
+  if (submission.recordings.length > 0) {
+    throw new SpeakingSubmissionStateError("recording_already_uploaded");
+  }
 
   const extension = extensionForMimeType(mimeType);
   const key = newStorageKey(`speaking/${userId}`, extension);
-  const stored = await getPrivateStorage().save({ key, data, mimeType });
+  const storage = getPrivateStorage();
+  const stored = await storage.save({ key, data, mimeType });
 
-  const asset = await prisma.audioAsset.create({
-    data: {
-      kind: "SPEAKING_RECORDING",
-      storageKey: stored.key,
-      url: stored.url,
-      mimeType: stored.mimeType,
-      sizeBytes: stored.sizeBytes,
-      durationSeconds: durationSeconds ?? null,
-      userId,
-      submissionId,
-    },
-    select: { id: true, sizeBytes: true, mimeType: true },
-  });
+  let asset: { id: string; sizeBytes: number | null; mimeType: string };
+  try {
+    asset = await prisma.audioAsset.create({
+      data: {
+        kind: "SPEAKING_RECORDING",
+        storageKey: stored.key,
+        url: stored.url,
+        mimeType: stored.mimeType,
+        sizeBytes: stored.sizeBytes,
+        durationSeconds: durationSeconds ?? null,
+        userId,
+        submissionId,
+      },
+      select: { id: true, sizeBytes: true, mimeType: true },
+    });
+  } catch (error) {
+    // Do not leave an orphaned private file if the metadata write fails.
+    await storage.remove(stored.key).catch(() => undefined);
+    throw error;
+  }
 
   return {
     assetId: asset.id,
@@ -212,13 +241,31 @@ export async function evaluateSpeakingSubmission(params: {
 
   const submission = await prisma.submission.findFirst({
     where: { id: submissionId, userId, module: "SPEAKING" },
-    include: { recordings: { orderBy: { createdAt: "desc" }, take: 1 } },
+    include: {
+      recordings: { orderBy: { createdAt: "desc" }, take: 1 },
+      speakingResult: true,
+    },
   });
   if (!submission) return null;
 
+  // Evaluation retries are idempotent. Never call a provider twice or mutate
+  // a completed result because the client retried after losing the response.
+  if (submission.status === "COMPLETED" && submission.speakingResult) {
+    return {
+      submissionId,
+      status: "COMPLETED",
+      isMock: submission.speakingResult.isMock,
+      transcript: submission.speakingResult.transcript,
+      overall: submission.speakingResult.overall,
+    };
+  }
+
   const recording = submission.recordings[0];
   if (!recording) {
-    await prisma.submission.update({ where: { id: submissionId }, data: { status: "FAILED" } });
+    await prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: "FAILED", processingStartedAt: null },
+    });
     return {
       submissionId,
       status: "FAILED",
@@ -231,7 +278,10 @@ export async function evaluateSpeakingSubmission(params: {
 
   const file = await getPrivateStorage().read(recording.storageKey);
   if (!file) {
-    await prisma.submission.update({ where: { id: submissionId }, data: { status: "FAILED" } });
+    await prisma.submission.update({
+      where: { id: submissionId },
+      data: { status: "FAILED", processingStartedAt: null },
+    });
     return {
       submissionId,
       status: "FAILED",
@@ -242,8 +292,19 @@ export async function evaluateSpeakingSubmission(params: {
     };
   }
 
-  // Draft row so a failed attempt is visible (and replaceable on retry).
-  await prisma.submission.update({ where: { id: submissionId }, data: { status: "PENDING" } });
+  // Atomically claim evaluation. Parallel retries cannot call a provider twice.
+  const claimed = await prisma.submission.updateMany({
+    where: {
+      id: submissionId,
+      userId,
+      module: "SPEAKING",
+      status: { in: ["PENDING", "FAILED"] },
+    },
+    data: { status: "PROCESSING", processingStartedAt: new Date() },
+  });
+  if (claimed.count !== 1) {
+    throw new SpeakingSubmissionStateError("evaluation_in_progress");
+  }
 
   let transcript = "";
   let isMock = false;
@@ -255,7 +316,7 @@ export async function evaluateSpeakingSubmission(params: {
     // PENDING or crash the route.
     const transcriber = getTranscriptionProvider();
     const grader = getSpeakingGrader();
-    isMock = speakingPipelineIsMock();
+    isMock = transcriber.isMock || grader.isMock || speakingPipelineIsMock();
 
     const transcription = await transcriber.transcribe({
       audio: file.data,
@@ -265,7 +326,10 @@ export async function evaluateSpeakingSubmission(params: {
     transcript = transcription.transcript;
 
     if (transcription.empty || transcript.trim().length === 0) {
-      await prisma.submission.update({ where: { id: submissionId }, data: { status: "FAILED" } });
+      await prisma.submission.update({
+        where: { id: submissionId },
+        data: { status: "FAILED", processingStartedAt: null },
+      });
       return {
         submissionId,
         status: "FAILED",
@@ -293,14 +357,18 @@ export async function evaluateSpeakingSubmission(params: {
       overall: grading.overallBand,
     };
   } catch (error) {
-    await prisma.submission.update({ where: { id: submissionId }, data: { status: "FAILED" } });
+    await prisma.submission.updateMany({
+      where: { id: submissionId, status: "PROCESSING" },
+      data: { status: "FAILED", processingStartedAt: null },
+    });
 
-    const reason =
+    const reason = sanitizeAiText(
       error instanceof SpeakingGradingError
         ? `${error.details.validationStatus}: ${error.details.reason}`
         : error instanceof Error
           ? error.message
-          : "unknown_error";
+          : "unknown_error"
+    );
 
     // Server-side log only; the API response stays generic.
     console.error(`[speaking] evaluation failed for submission ${submissionId}: ${reason}`);
@@ -356,6 +424,7 @@ async function persistSpeakingResult(params: {
       where: { id: submissionId },
       data: {
         status: "COMPLETED",
+        processingStartedAt: null,
         // The transcript is the "text" of a speaking attempt; keeping it here
         // makes the submission list and the dashboard uniform across modules.
         essay: transcript,
@@ -369,6 +438,7 @@ async function persistSpeakingResult(params: {
 
 /** Owner-scoped speaking submission with its result and recordings. */
 export async function getOwnSpeakingSubmission(userId: string, submissionId: string) {
+  await failStaleSpeakingSubmissions(userId);
   return prisma.submission.findFirst({
     where: { id: submissionId, userId, module: "SPEAKING" },
     include: {
@@ -398,6 +468,7 @@ export interface SpeakingProgress {
 
 /** Dashboard-facing progress for the Speaking module (database only). */
 export async function getSpeakingProgress(userId: string): Promise<SpeakingProgress> {
+  await failStaleSpeakingSubmissions(userId);
   const submissions = await prisma.submission.findMany({
     where: { userId, module: "SPEAKING" },
     orderBy: { createdAt: "asc" },
@@ -428,4 +499,21 @@ export async function getSpeakingProgress(userId: string): Promise<SpeakingProgr
       date: s.createdAt.toISOString(),
     })),
   };
+}
+
+async function failStaleSpeakingSubmissions(userId: string): Promise<void> {
+  await prisma.submission.updateMany({
+    where: {
+      userId,
+      module: "SPEAKING",
+      OR: [
+        { status: "PENDING", createdAt: { lt: new Date(Date.now() - 30 * 60_000) } },
+        {
+          status: "PROCESSING",
+          processingStartedAt: { lt: new Date(Date.now() - 5 * 60_000) },
+        },
+      ],
+    },
+    data: { status: "FAILED", processingStartedAt: null },
+  });
 }

@@ -1,7 +1,7 @@
 /**
  * SMS provider abstraction.
  *
- * SMS_MODE=mock  — logs the code to the server console (development).
+ * SMS_MODE=mock  — records no delivery and logs no sensitive payload.
  * SMS_MODE=live  — wire a real provider (Eskiz, Playmobile, etc.) here.
  *
  * Verification codes are stored in the SmsCode table; the architecture is
@@ -17,9 +17,9 @@ export interface SmsSender {
 }
 
 class MockSmsSender implements SmsSender {
-  async send(phone: string, message: string): Promise<void> {
-    // Development only — never log codes in production.
-    console.log(`[sms:mock] to=${phone} message="${message}"`);
+  async send(_phone: string, _message: string): Promise<void> {
+    // Verification codes and full phone numbers are credentials/PII. Mock mode
+    // intentionally remains silent instead of copying them into server logs.
   }
 }
 

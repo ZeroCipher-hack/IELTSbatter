@@ -19,7 +19,8 @@ const CRITERIA = [
  * Mock evaluations are explicitly labelled MOCK — a development placeholder is
  * never presented as a real AI assessment.
  */
-export default async function SpeakingResultPage({ params }: { params: { id: string } }) {
+export default async function SpeakingResultPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -118,6 +119,7 @@ export default async function SpeakingResultPage({ params }: { params: { id: str
                 </Card>
               ))}
             </div>
+            <p className="mt-3 text-xs text-gray-500">{t("result.pronunciationNotice")}</p>
 
             <Card className="mt-6">
               <h2 className="text-lg font-semibold text-gray-900">{t("result.summary")}</h2>

@@ -104,6 +104,7 @@ describe("isAnswerCorrect per question type", () => {
     const question = q({ type: "MULTIPLE_CHOICE", answer: { answers: ["A", "C"] } });
     expect(isAnswerCorrect(question, ["A", "C"])).toBe(true);
     expect(isAnswerCorrect(question, ["C", "A"])).toBe(true);
+    expect(isAnswerCorrect(question, ["A", "A", "C"])).toBe(false);
     expect(isAnswerCorrect(question, ["A"])).toBe(false);
     expect(isAnswerCorrect(question, ["A", "B"])).toBe(false);
   });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { UnauthorizedError } from "@/lib/auth/session";
+import { summarizeError } from "@/lib/ai/sanitize";
 
 /** Uniform JSON error shape. Never leaks internals or secrets. */
 export function apiError(status: number, code: string, message?: string): NextResponse {
@@ -15,8 +16,15 @@ export function handleApiError(error: unknown): NextResponse {
     const first = error.errors[0];
     return apiError(400, "validation_error", first ? `${first.path.join(".")}: ${first.message}` : undefined);
   }
+  // request.json() throws SyntaxError for malformed JSON. Treat bad client
+  // input as a 400 instead of logging it as an internal server failure.
+  if (error instanceof SyntaxError) {
+    return apiError(400, "invalid_json");
+  }
   // Log full details server-side only.
-  console.error("[api] unhandled error:", error instanceof Error ? error.stack : error);
+  // Use a bounded, scrubbed summary: stacks and credentials must not reach
+  // production logs through malformed provider/database errors.
+  console.error("[api] unhandled error:", summarizeError(error));
   return apiError(500, "internal_error", "Something went wrong. Please try again.");
 }
 

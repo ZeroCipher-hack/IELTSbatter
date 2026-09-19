@@ -3,7 +3,7 @@
  * persistence, ownership and failure handling. No external API is contacted —
  * the providers are injected through the lib/ai/speaking factory.
  */
-import { describe, it, expect, beforeAll, afterAll, afterEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { MemoryStorage, resetStorage, setStorageForTesting } from "@/lib/storage";
 import { setSpeakingProvidersForTesting } from "@/lib/ai/speaking";
@@ -104,6 +104,15 @@ describe("speaking catalog", () => {
     expect(test!.prompts[0].speakingSeconds).toBe(45);
     expect(test!.prompts[0].part).toBe(1);
   });
+
+  it("rejects a prompt id that does not belong to the test", async () => {
+    const created = await createSpeakingSubmission({
+      userId: userA.id,
+      testId,
+      promptId: "missing-prompt",
+    });
+    expect(created).toBeNull();
+  });
 });
 
 describe("recording storage", () => {
@@ -143,14 +152,37 @@ describe("recording storage", () => {
     });
     expect(denied).toBeNull();
   });
+
+  it("refuses duplicate recordings for one submission", async () => {
+    setStorageForTesting({ private: new MemoryStorage() });
+    const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
+    await attachRecording({
+      userId: userA.id,
+      submissionId: created!.submissionId,
+      data: FAKE_AUDIO,
+      mimeType: "audio/webm",
+    });
+    await expect(
+      attachRecording({
+        userId: userA.id,
+        submissionId: created!.submissionId,
+        data: FAKE_AUDIO,
+        mimeType: "audio/webm",
+      })
+    ).rejects.toMatchObject({ code: "recording_already_uploaded" });
+  });
 });
 
 describe("evaluation pipeline (mock providers)", () => {
   it("transcribes, evaluates, stores the result and marks it as MOCK", async () => {
     setStorageForTesting({ private: new MemoryStorage() });
+    const transcriber = new MockTranscriptionProvider();
+    const grader = new MockSpeakingGrader();
+    const transcribeSpy = vi.spyOn(transcriber, "transcribe");
+    const gradeSpy = vi.spyOn(grader, "gradeSpeaking");
     setSpeakingProvidersForTesting({
-      transcriber: new MockTranscriptionProvider(),
-      grader: new MockSpeakingGrader(),
+      transcriber,
+      grader,
     });
 
     const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
@@ -183,6 +215,15 @@ describe("evaluation pipeline (mock providers)", () => {
     expect(stored!.essay).toBe(result!.transcript);
     expect(stored!.wordCount).toBeGreaterThan(0);
     expect(stored!.recordings).toHaveLength(1);
+
+    const retry = await evaluateSpeakingSubmission({
+      userId: userA.id,
+      submissionId: created!.submissionId,
+      feedbackLocale: "uz",
+    });
+    expect(retry).toMatchObject({ status: "COMPLETED", overall: result!.overall, isMock: true });
+    expect(transcribeSpy).toHaveBeenCalledOnce();
+    expect(gradeSpy).toHaveBeenCalledOnce();
   });
 
   it("marks the submission FAILED when no recording was uploaded", async () => {
@@ -294,6 +335,17 @@ describe("evaluation pipeline (mock providers)", () => {
     });
     expect(result!.status).toBe("FAILED");
     expect(result!.reason).toBe("empty_transcript");
+  });
+
+  it("closes an abandoned PENDING submission instead of leaving it forever", async () => {
+    const created = await createSpeakingSubmission({ userId: userA.id, testId, promptId });
+    await prisma.submission.update({
+      where: { id: created!.submissionId },
+      data: { createdAt: new Date(Date.now() - 31 * 60_000) },
+    });
+
+    const stored = await getOwnSpeakingSubmission(userA.id, created!.submissionId);
+    expect(stored!.status).toBe("FAILED");
   });
 });
 

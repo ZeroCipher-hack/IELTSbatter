@@ -7,11 +7,12 @@ import { SpeakingInterview } from "@/components/speaking/SpeakingInterview";
 import { getSession } from "@/lib/auth/session";
 import { getPublicSpeakingTest } from "@/lib/speaking/service";
 
-export default async function SpeakingTestPage({
-  params,
-}: {
-  params: { testId: string };
-}) {
+export default async function SpeakingTestPage(
+  props: {
+    params: Promise<{ testId: string }>;
+  }
+) {
+  const params = await props.params;
   const session = await getSession();
   if (!session) redirect("/login");
 
@@ -20,7 +21,7 @@ export default async function SpeakingTestPage({
   if (!test) notFound();
 
   // Feedback language follows the UI locale cookie (same as the Writing flow).
-  const locale = cookies().get("axi_locale")?.value === "ru" ? "ru" : "uz";
+  const locale = (await cookies()).get("axi_locale")?.value === "ru" ? "ru" : "uz";
 
   return (
     <div className="min-h-screen bg-gray-50">

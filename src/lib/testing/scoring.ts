@@ -63,7 +63,11 @@ export function isAnswerCorrect(
   if (Array.isArray(response)) {
     const given = response.filter((v) => typeof v === "string" && v.trim().length > 0);
     if (given.length === 0) return false;
-    const normalizedGiven = new Set(given.map((v) => normalizeAnswer(v, question)));
+    const normalizedValues = given.map((v) => normalizeAnswer(v, question));
+    const normalizedGiven = new Set(normalizedValues);
+    // Duplicating one choice must not satisfy a multi-answer question or hide
+    // an invalid client payload behind set de-duplication.
+    if (normalizedGiven.size !== normalizedValues.length) return false;
     // Every accepted answer must be present and nothing extra claimed.
     return (
       normalizedGiven.size === accepted.length && accepted.every((a) => normalizedGiven.has(a))

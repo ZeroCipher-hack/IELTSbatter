@@ -7,6 +7,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import { safeNextPath } from "@/lib/auth/redirect";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const t = useTranslations("auth");
@@ -50,7 +51,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         return;
       }
       const next = searchParams.get("next");
-      router.push(next && next.startsWith("/") ? next : "/dashboard");
+      router.push(safeNextPath(next));
       router.refresh();
     } catch {
       setError(t("errors.generic"));

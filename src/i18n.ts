@@ -8,7 +8,7 @@ export const LOCALE_COOKIE = "axi_locale";
 export type AppLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export default getRequestConfig(async () => {
-  const cookieLocale = cookies().get(LOCALE_COOKIE)?.value;
+  const cookieLocale = (await cookies()).get(LOCALE_COOKIE)?.value;
   const locale = SUPPORTED_LOCALES.includes(cookieLocale as AppLocale)
     ? (cookieLocale as AppLocale)
     : DEFAULT_LOCALE;

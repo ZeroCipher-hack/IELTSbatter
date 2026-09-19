@@ -50,9 +50,9 @@ describe("rawToBand", () => {
   });
 
   it("always returns a 0.5 step between 0 and 9", () => {
-    for (const module of ["READING", "LISTENING"] as const) {
+    for (const moduleName of ["READING", "LISTENING"] as const) {
       for (let raw = 0; raw <= 40; raw++) {
-        const band = rawToBand(module, raw, 40);
+        const band = rawToBand(moduleName, raw, 40);
         expect(Number.isInteger(band * 2)).toBe(true);
         expect(band).toBeGreaterThanOrEqual(0);
         expect(band).toBeLessThanOrEqual(9);

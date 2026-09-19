@@ -22,7 +22,11 @@ export const env = {
     return required("DATABASE_URL");
   },
   get sessionSecret(): string {
-    return required("SESSION_SECRET");
+    const value = required("SESSION_SECRET");
+    if (value.length < 32) {
+      throw new Error("SESSION_SECRET must be at least 32 characters");
+    }
+    return value;
   },
   /** "gemini" | "mock" */
   get aiMode(): string {

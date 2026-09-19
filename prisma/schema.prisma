@@ -4,9 +4,8 @@
 // via the `module` enum later.
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["driverAdapters", "queryCompiler"]
-  engineType      = "client"
+  provider   = "prisma-client-js"
+  engineType = "client"
 }
 
 datasource db {
@@ -28,6 +27,7 @@ enum Module {
 
 enum SubmissionStatus {
   PENDING
+  PROCESSING
   COMPLETED
   FAILED
 }
@@ -110,6 +110,7 @@ model Submission {
   essay     String
   wordCount Int
   status    SubmissionStatus @default(PENDING)
+  processingStartedAt DateTime?
   createdAt DateTime         @default(now())
 
   score          Score?
@@ -288,8 +289,8 @@ model AudioAsset {
   /** Owner of user recordings (speaking); null for published test audio. */
   userId          String?
   user            User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
-  submissionId    String?
-  submission      Submission? @relation(fields: [submissionId], references: [id], onDelete: SetNull)
+  submissionId    String?     @unique
+  submission      Submission? @relation(fields: [submissionId], references: [id], onDelete: Cascade)
   createdAt       DateTime    @default(now())
 
   sections TestSection[] @relation("SectionAudio")

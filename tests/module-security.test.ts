@@ -14,6 +14,7 @@ import {
   createSpeakingSubmissionSchema,
   isAllowedAudioMimeType,
   baseMimeType,
+  hasValidAudioSignature,
 } from "@/lib/validations/speaking";
 import { toPublicTest } from "@/lib/testing/types";
 import type { TestDefinition } from "@/lib/testing/types";
@@ -143,6 +144,16 @@ describe("input validation", () => {
     expect(isAllowedAudioMimeType("application/pdf")).toBe(false);
     expect(isAllowedAudioMimeType("text/html")).toBe(false);
     expect(baseMimeType("audio/webm;codecs=opus")).toBe("audio/webm");
+  });
+
+  it("rejects renamed non-audio files using container signatures", () => {
+    const wav = Buffer.alloc(12);
+    wav.write("RIFF", 0);
+    wav.write("WAVE", 8);
+    expect(hasValidAudioSignature(wav, "audio/wav")).toBe(true);
+    expect(hasValidAudioSignature(Buffer.from("<script>alert(1)</script>"), "audio/wav")).toBe(false);
+    expect(hasValidAudioSignature(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), "audio/webm")).toBe(true);
+    expect(hasValidAudioSignature(Buffer.from("not webm"), "audio/webm")).toBe(false);
   });
 });
 

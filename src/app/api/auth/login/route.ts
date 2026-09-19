@@ -6,6 +6,10 @@ import { loginSchema } from "@/lib/validations/auth";
 import { apiError, handleApiError, clientIp } from "@/lib/utils/api";
 import { rateLimit } from "@/lib/utils/rate-limit";
 
+// Public, precomputed bcrypt value used only to keep unknown-user and
+// wrong-password requests on the same expensive verification path.
+const DUMMY_PASSWORD_HASH = "$2b$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
+
 export async function POST(request: Request) {
   try {
     if (!rateLimit(`login:${clientIp(request)}`, { limit: 15, windowMs: 60_000 })) {
@@ -16,8 +20,12 @@ export async function POST(request: Request) {
     const input = loginSchema.parse(body);
 
     const user = await prisma.user.findUnique({ where: { phone: input.phone } });
+    const passwordMatches = await verifyPassword(
+      input.password,
+      user?.passwordHash ?? DUMMY_PASSWORD_HASH
+    );
     // Same error for unknown phone and wrong password — no user enumeration.
-    if (!user || !(await verifyPassword(input.password, user.passwordHash))) {
+    if (!user || !passwordMatches) {
       return apiError(401, "invalid_credentials");
     }
 

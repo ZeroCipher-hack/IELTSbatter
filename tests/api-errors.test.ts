@@ -34,6 +34,12 @@ describe("handleApiError", () => {
     expect((await body(response)).error.code).toBe("validation_error");
   });
 
+  it("maps malformed JSON syntax to a safe 400", async () => {
+    const response = handleApiError(new SyntaxError("Unexpected token at position 3"));
+    expect(response.status).toBe(400);
+    expect((await body(response)).error.code).toBe("invalid_json");
+  });
+
   it("returns a generic 500 without leaking internals", async () => {
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     const secret = "AIzaSyD-EXAMPLE-KEY-1234567890";
@@ -46,6 +52,8 @@ describe("handleApiError", () => {
     expect(JSON.stringify(payload)).not.toContain(secret);
     expect(JSON.stringify(payload)).not.toContain("secret.ts");
     expect(JSON.stringify(payload)).not.toContain("stack");
+    expect(spy).toHaveBeenCalledOnce();
+    expect(JSON.stringify(spy.mock.calls)).not.toContain(secret);
     spy.mockRestore();
   });
 });

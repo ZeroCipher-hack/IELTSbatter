@@ -9,7 +9,8 @@ export const dynamic = "force-dynamic";
  * Status + result of the caller's own speaking submission.
  * Another user's id is indistinguishable from a missing one (404).
  */
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
 

@@ -3,7 +3,8 @@ import { requireSession } from "@/lib/auth/session";
 import { getOwnSubmission } from "@/lib/writing/service";
 import { apiError, handleApiError } from "@/lib/utils/api";
 
-export async function GET(_request: Request, { params }: { params: { id: string } }) {
+export async function GET(_request: Request, props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
   try {
     const session = await requireSession();
     // Ownership enforced inside the query — users can only read their own.

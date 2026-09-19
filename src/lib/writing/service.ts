@@ -36,6 +36,8 @@ export async function submitAndGradeEssay(params: {
   const { userId, input, feedbackLocale } = params;
   const wordCount = countWords(input.essay);
 
+  await failStaleWritingSubmissions(userId);
+
   const submission = await prisma.submission.create({
     data: {
       userId,
@@ -54,6 +56,10 @@ export async function submitAndGradeEssay(params: {
   let grader: AIGrader | undefined;
 
   try {
+    await prisma.submission.update({
+      where: { id: submission.id },
+      data: { status: "PROCESSING", processingStartedAt: new Date() },
+    });
     grader = getGrader();
     const result = await grader.gradeWriting({
       question: input.question,
@@ -135,7 +141,7 @@ export async function submitAndGradeEssay(params: {
       }),
       prisma.submission.update({
         where: { id: submission.id },
-        data: { status: "COMPLETED" },
+        data: { status: "COMPLETED", processingStartedAt: null },
       }),
     ]);
 
@@ -178,7 +184,7 @@ export async function submitAndGradeEssay(params: {
       }),
       prisma.submission.update({
         where: { id: submission.id },
-        data: { status: "FAILED" },
+        data: { status: "FAILED", processingStartedAt: null },
       }),
     ]);
     return {
@@ -206,25 +212,40 @@ export async function submitAndGradeEssay(params: {
 
 /** Load a submission with all grading artefacts — ONLY if owned by userId. */
 export async function getOwnSubmission(userId: string, submissionId: string) {
+  await failStaleWritingSubmissions(userId);
   return prisma.submission.findFirst({
     where: { id: submissionId, userId },
     include: {
       score: true,
       feedback: true,
       errors: { orderBy: { createdAt: "asc" } },
+      aiEvaluations: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { provider: true, success: true },
+      },
     },
   });
 }
 
 export async function listOwnSubmissions(userId: string) {
+  await failStaleWritingSubmissions(userId);
   return prisma.submission.findMany({
     where: { userId, module: "WRITING" },
     orderBy: { createdAt: "desc" },
-    include: { score: true },
+    include: {
+      score: true,
+      aiEvaluations: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        select: { provider: true, success: true },
+      },
+    },
   });
 }
 
 export async function getProgressStats(userId: string) {
+  await failStaleWritingSubmissions(userId);
   const submissions = await prisma.submission.findMany({
     where: { userId, module: "WRITING", status: "COMPLETED" },
     orderBy: { createdAt: "asc" },
@@ -250,6 +271,21 @@ export async function getProgressStats(userId: string) {
       overall: s.score!.overall,
     })),
   };
+}
+
+async function failStaleWritingSubmissions(userId: string): Promise<void> {
+  await prisma.submission.updateMany({
+    where: {
+      userId,
+      module: "WRITING",
+      status: { in: ["PENDING", "PROCESSING"] },
+      OR: [
+        { status: "PENDING", createdAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+        { status: "PROCESSING", processingStartedAt: { lt: new Date(Date.now() - 5 * 60_000) } },
+      ],
+    },
+    data: { status: "FAILED", processingStartedAt: null },
+  });
 }
 
 /**
