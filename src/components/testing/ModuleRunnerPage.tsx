@@ -7,6 +7,7 @@ import { modulePath } from "@/components/testing/ModuleCatalog";
 import { getSession } from "@/lib/auth/session";
 import { ensureAttempt, getOwnAttempt, getPublicTest, type ObjectiveModule } from "@/lib/testing/service";
 import type { AnswerValue } from "@/components/testing/QuestionInput";
+import { FullExamStateError } from "@/lib/full-exam/service";
 
 /**
  * Server shell for the test runner.
@@ -17,9 +18,11 @@ import type { AnswerValue } from "@/components/testing/QuestionInput";
 export async function ModuleRunnerPage({
   module,
   testId,
+  fullExamSessionId,
 }: {
   module: ObjectiveModule;
   testId: string;
+  fullExamSessionId?: string | null;
 }) {
   const session = await getSession();
   if (!session) redirect("/login");
@@ -28,7 +31,9 @@ export async function ModuleRunnerPage({
   const test = await getPublicTest(testId, module);
   if (!test) notFound();
 
-  const attempt = await ensureAttempt({ userId: session.userId, testId, module });
+  let attempt;
+  try { attempt = await ensureAttempt({ userId: session.userId, testId, module, fullExamSessionId }); }
+  catch (error) { if (error instanceof FullExamStateError) notFound(); throw error; }
   if (!attempt) notFound();
 
   const state = await getOwnAttempt(session.userId, attempt.attemptId);
@@ -67,6 +72,7 @@ export async function ModuleRunnerPage({
             attemptId={attempt.attemptId}
             startedAt={attempt.startedAt.toISOString()}
             initialResponses={responses}
+            fullExamSessionId={fullExamSessionId}
           />
         </div>
       </main>

@@ -7,7 +7,6 @@ import { BandBadge } from "@/components/ui/BandBadge";
 import { ProgressChart } from "@/components/dashboard/ProgressChart";
 import {
   ModuleOverview,
-  computeDashboardOverall,
   type ModuleOverviewItem,
 } from "@/components/dashboard/ModuleOverview";
 import { getSession } from "@/lib/auth/session";
@@ -21,13 +20,15 @@ export default async function DashboardPage() {
   if (!session) redirect("/login");
 
   const t = await getTranslations("dashboard");
-  const [user, stats, submissions, reading, listening, speaking] = await Promise.all([
+  const tc = await getTranslations("common");
+  const [user, stats, submissions, reading, listening, speaking, latestFullExam] = await Promise.all([
     prisma.user.findUnique({ where: { id: session.userId }, select: { name: true } }),
     getProgressStats(session.userId),
     listOwnSubmissions(session.userId),
     getModuleProgress(session.userId, "READING"),
     getModuleProgress(session.userId, "LISTENING"),
     getSpeakingProgress(session.userId),
+    prisma.fullExamSession.findFirst({ where: { userId: session.userId, status: "COMPLETED" }, orderBy: { completedAt: "desc" }, select: { overallBand: true } }),
   ]);
 
   // Writing bands come from the same history the chart uses (DB only).
@@ -96,7 +97,7 @@ export default async function DashboardPage() {
     },
   ];
 
-  const overallBand = computeDashboardOverall(overviewItems);
+  const overallBand = latestFullExam?.overallBand ?? null;
 
   const averages: Array<[string, number]> = [
     [t("taskResponse"), stats.averageTaskResponse],
@@ -119,10 +120,10 @@ export default async function DashboardPage() {
             )}
           </div>
           <Link
-            href="/writing"
+            href="/full-exam"
             className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-brand-700"
           >
-            {t("writeEssay")}
+            {tc("fullExam")}
           </Link>
         </div>
 

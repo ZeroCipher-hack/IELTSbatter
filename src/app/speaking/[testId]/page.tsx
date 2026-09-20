@@ -6,23 +6,26 @@ import { Header } from "@/components/layout/Header";
 import { SpeakingInterview } from "@/components/speaking/SpeakingInterview";
 import { getSession } from "@/lib/auth/session";
 import { createOrResumeSpeakingInterview, getPublicSpeakingTest } from "@/lib/speaking/service";
+import { FullExamStateError } from "@/lib/full-exam/service";
 
 export default async function SpeakingTestPage(
   props: {
     params: Promise<{ testId: string }>;
+    searchParams: Promise<{ fullExamId?: string }>;
   }
 ) {
   const params = await props.params;
+  const search = await props.searchParams;
+  const fullExamSessionId = search.fullExamId ?? null;
   const session = await getSession();
   if (!session) redirect("/login");
 
   const t = await getTranslations("speaking");
   const test = await getPublicSpeakingTest(params.testId);
   if (!test) notFound();
-  const interview = await createOrResumeSpeakingInterview({
-    userId: session.userId,
-    testId: params.testId,
-  });
+  let interview;
+  try { interview = await createOrResumeSpeakingInterview({ userId: session.userId, testId: params.testId, fullExamSessionId }); }
+  catch (error) { if (error instanceof FullExamStateError) notFound(); throw error; }
   if (!interview) notFound();
 
   // Feedback language follows the UI locale cookie (same as the Writing flow).
@@ -46,7 +49,7 @@ export default async function SpeakingTestPage(
         </div>
 
         <div className="mt-6">
-          <SpeakingInterview test={test} locale={locale} initialInterview={interview} />
+          <SpeakingInterview test={test} locale={locale} initialInterview={interview} fullExamSessionId={fullExamSessionId} />
         </div>
       </main>
     </div>

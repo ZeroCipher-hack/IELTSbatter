@@ -17,7 +17,7 @@ function countWords(text: string): number {
   return text.trim().split(/\s+/).filter(Boolean).length;
 }
 
-export function EssayEditor({ minWords }: { minWords: number }) {
+export function EssayEditor({ minWords, fullExamSessionId = null }: { minWords: number; fullExamSessionId?: string | null }) {
   const t = useTranslations("writing");
   const locale = useLocale();
   const router = useRouter();
@@ -48,6 +48,7 @@ export function EssayEditor({ minWords }: { minWords: number }) {
           "Content-Type": "application/json",
           "x-axi-locale": locale,
           "Idempotency-Key": idempotencyKey.current,
+          ...(fullExamSessionId ? { "x-full-exam-id": fullExamSessionId } : {}),
         },
         body: JSON.stringify({ question, essay, testType: "TASK_2" }),
       });
@@ -71,7 +72,7 @@ export function EssayEditor({ minWords }: { minWords: number }) {
         return;
       }
       idempotencyKey.current = null;
-      router.push(`/writing/result/${data.submissionId}`);
+      router.push(fullExamSessionId ? `/full-exam/${fullExamSessionId}` : `/writing/result/${data.submissionId}`);
     } catch {
       setError(t("errors.generic"));
     } finally {

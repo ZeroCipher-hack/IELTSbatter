@@ -32,6 +32,13 @@ enum SubmissionStatus {
   FAILED
 }
 
+enum FullExamStatus {
+  IN_PROGRESS
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum SpeakingInterviewState {
   PREPARING
   PART_1
@@ -102,6 +109,29 @@ model User {
   testAttempts       TestAttempt[]
   audioAssets        AudioAsset[]
   speakingInterviews SpeakingInterview[]
+  fullExamSessions   FullExamSession[]
+}
+
+model FullExamSession {
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        FullExamStatus @default(IN_PROGRESS)
+  listeningBand Float?
+  readingBand   Float?
+  writingBand   Float?
+  speakingBand  Float?
+  overallBand   Float?
+  startedAt     DateTime       @default(now())
+  submittedAt   DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+  attempts      TestAttempt[]
+  submissions   Submission[]
+
+  @@index([userId, createdAt])
+  @@index([status, updatedAt])
 }
 
 model SmsCode {
@@ -128,6 +158,8 @@ model Submission {
   processingStartedAt DateTime?
   idempotencyKey      String?
   requestFingerprint  String?
+  fullExamSessionId   String?
+  fullExamSession     FullExamSession? @relation(fields: [fullExamSessionId], references: [id], onDelete: SetNull)
   createdAt           DateTime         @default(now())
 
   score             Score?
@@ -140,6 +172,7 @@ model Submission {
 
   @@unique([userId, idempotencyKey])
   @@index([userId, createdAt])
+  @@index([fullExamSessionId, module, createdAt])
 }
 
 model Score {
@@ -341,25 +374,28 @@ model AudioAsset {
  * One user's attempt at a test.
  */
 model TestAttempt {
-  id               String        @id @default(cuid())
-  userId           String
-  user             User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  testId           String
-  test             Test          @relation(fields: [testId], references: [id], onDelete: Cascade)
-  module           Module
-  status           AttemptStatus @default(IN_PROGRESS)
-  startedAt        DateTime      @default(now())
-  submittedAt      DateTime?
-  timeSpentSeconds Int?
-  rawScore         Int?
-  maxScore         Int?
-  band             Float?
-  createdAt        DateTime      @default(now())
+  id                String           @id @default(cuid())
+  userId            String
+  user              User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  testId            String
+  test              Test             @relation(fields: [testId], references: [id], onDelete: Cascade)
+  module            Module
+  status            AttemptStatus    @default(IN_PROGRESS)
+  startedAt         DateTime         @default(now())
+  submittedAt       DateTime?
+  timeSpentSeconds  Int?
+  rawScore          Int?
+  maxScore          Int?
+  band              Float?
+  createdAt         DateTime         @default(now())
+  fullExamSessionId String?
+  fullExamSession   FullExamSession? @relation(fields: [fullExamSessionId], references: [id], onDelete: SetNull)
 
   answers TestAnswer[]
 
   @@index([userId, createdAt])
   @@index([testId])
+  @@index([fullExamSessionId, module, createdAt])
 }
 
 model TestAnswer {
@@ -399,6 +435,7 @@ model SpeakingResult {
   lexicalResource       Float
   grammar               Float
   pronunciation         Float
+  pronunciationSource   String     @default("TRANSCRIPT")
   overall               Float
   summary               String
   strengths             String[]

@@ -22,6 +22,7 @@ import {
   type PublicTest,
   type TestDefinition,
 } from "@/lib/testing/types";
+import { attachAttemptToFullExam, requireFullExamModuleAccess } from "@/lib/full-exam/service";
 
 export type ObjectiveModule = Extract<TestModule, "READING" | "LISTENING">;
 
@@ -184,8 +185,10 @@ export async function ensureAttempt(params: {
   userId: string;
   testId: string;
   module: ObjectiveModule;
+  fullExamSessionId?: string | null;
 }): Promise<{ attemptId: string; startedAt: Date } | null> {
-  const { userId, testId, module } = params;
+  const { userId, testId, module, fullExamSessionId = null } = params;
+  if (fullExamSessionId) await requireFullExamModuleAccess(userId, fullExamSessionId, module);
 
   const test = await prisma.test.findFirst({
     where: { id: testId, module, isPublished: true },
@@ -217,11 +220,14 @@ export async function ensureAttempt(params: {
     orderBy: { startedAt: "desc" },
     select: { id: true, startedAt: true },
   });
-  if (existing) return { attemptId: existing.id, startedAt: existing.startedAt };
+  if (existing) {
+    if (fullExamSessionId) await attachAttemptToFullExam({ userId, sessionId: fullExamSessionId, attemptId: existing.id, module });
+    return { attemptId: existing.id, startedAt: existing.startedAt };
+  }
 
   try {
     const created = await prisma.testAttempt.create({
-      data: { userId, testId, module, status: "IN_PROGRESS" },
+      data: { userId, testId, module, status: "IN_PROGRESS", fullExamSessionId },
       select: { id: true, startedAt: true },
     });
     return { attemptId: created.id, startedAt: created.startedAt };
@@ -234,7 +240,10 @@ export async function ensureAttempt(params: {
       orderBy: { startedAt: "desc" },
       select: { id: true, startedAt: true },
     });
-    if (raced) return { attemptId: raced.id, startedAt: raced.startedAt };
+    if (raced) {
+      if (fullExamSessionId) await attachAttemptToFullExam({ userId, sessionId: fullExamSessionId, attemptId: raced.id, module });
+      return { attemptId: raced.id, startedAt: raced.startedAt };
+    }
     throw error;
   }
 }

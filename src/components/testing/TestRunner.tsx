@@ -17,6 +17,7 @@ interface TestRunnerProps {
   attemptId: string;
   startedAt: string;
   initialResponses: Record<string, AnswerValue>;
+  fullExamSessionId?: string | null;
 }
 
 const AUTOSAVE_DELAY_MS = 900;
@@ -28,7 +29,7 @@ const AUTOSAVE_DELAY_MS = 900;
  * crash never loses work) and are graded server-side on submit. The timer is
  * derived from the attempt's server-side start time.
  */
-export function TestRunner({ module, test, attemptId, startedAt, initialResponses }: TestRunnerProps) {
+export function TestRunner({ module, test, attemptId, startedAt, initialResponses, fullExamSessionId }: TestRunnerProps) {
   const t = useTranslations("testing");
   const router = useRouter();
 
@@ -123,13 +124,13 @@ export function TestRunner({ module, test, attemptId, startedAt, initialResponse
           body: JSON.stringify({ responses: responsesRef.current }),
         });
         if (!response.ok) throw new Error(`submit_failed_${response.status}`);
-        router.push(`/${module.toLowerCase()}/result/${attemptId}`);
+        router.push(fullExamSessionId ? `/full-exam/${fullExamSessionId}` : `/${module.toLowerCase()}/result/${attemptId}`);
       } catch {
         setSubmitting(false);
         setSubmitError(auto ? t("errors.autoSubmitFailed") : t("errors.submitFailed"));
       }
     },
-    [attemptId, module, router, submitting, t]
+    [attemptId, fullExamSessionId, module, router, submitting, t]
   );
 
   useEffect(() => {

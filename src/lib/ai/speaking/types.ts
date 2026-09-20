@@ -92,6 +92,7 @@ export interface SpeakingGradingInput {
   part?: number | null;
   /** Feedback language for the prose fields ("uz" | "ru" | "en"). */
   feedbackLocale?: string;
+  audioParts?: Array<{ audio: Buffer; mimeType: string }>;
 }
 
 export interface SpeakingGradingMeta {
@@ -142,6 +143,7 @@ export interface SpeakingPromptParams {
   transcript: string;
   part?: number | null;
   feedbackLocale?: string;
+  audioProvided?: boolean;
 }
 
 const LANGUAGE_NAMES: Record<string, string> = {
@@ -158,7 +160,10 @@ export function buildSpeakingGradingPrompt(params: SpeakingPromptParams): string
   const language = LANGUAGE_NAMES[params.feedbackLocale ?? "uz"] ?? "Uzbek";
   const part = params.part ? `IELTS Speaking Part ${params.part}` : "IELTS Speaking";
 
-  return `You are an experienced, certified IELTS Speaking examiner. Evaluate the candidate's spoken answer below, which is provided as a transcript produced by an automatic speech recogniser.
+  const pronunciationRule = params.audioProvided
+    ? "Listen to the attached recordings and assess intelligibility, stress, rhythm, chunking and individual sounds. Use the transcript only as supporting context."
+    : "No audio is attached. Judge pronunciation conservatively from transcript evidence only, give a mid-range band when evidence is insufficient, and state this limitation explicitly.";
+  return `You are an experienced, certified IELTS Speaking examiner. Evaluate the candidate's spoken answer below. A transcript is always provided; private audio recordings may also be attached.
 
 CONTEXT
 - Task: ${part}
@@ -168,7 +173,7 @@ CRITERIA (official IELTS Speaking band descriptors)
 1. Fluency and Coherence — speech rate, hesitation, repetition, self-correction, logical sequencing, cohesive devices.
 2. Lexical Resource — range, precision, collocations, idiomatic language, paraphrase ability.
 3. Grammatical Range and Accuracy — variety of structures, complex sentences, error density and severity.
-4. Pronunciation — NOTE: you only see a transcript, so judge pronunciation conservatively from the evidence available (word choice patterns suggesting mispronunciation risk, filler words, self-corrections). If there is not enough evidence, give a mid-range band and say so explicitly in the note.
+4. Pronunciation — ${pronunciationRule}
 
 RULES
 - Grade strictly and consistently. Do NOT inflate scores, do NOT reward effort.

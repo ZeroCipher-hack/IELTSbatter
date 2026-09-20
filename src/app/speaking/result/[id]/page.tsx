@@ -119,7 +119,7 @@ export default async function SpeakingResultPage(props: { params: Promise<{ id: 
                 </Card>
               ))}
             </div>
-            <p className="mt-3 text-xs text-gray-500">{t("result.pronunciationNotice")}</p>
+            <p className="mt-3 text-xs text-gray-500">{t(result.pronunciationSource === "AUDIO" ? "result.pronunciationAudioNotice" : "result.pronunciationNotice")}</p>
 
             <Card className="mt-6">
               <h2 className="text-lg font-semibold text-gray-900">{t("result.summary")}</h2>

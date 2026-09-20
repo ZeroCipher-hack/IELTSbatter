@@ -120,6 +120,13 @@ describe("overall band", () => {
 });
 
 describe("gemini speaking grader", () => {
+  it("forwards private audio for pronunciation analysis", async () => {
+    const received: Array<Array<{ audio: Buffer; mimeType: string }> | undefined> = [];
+    const transport: GeminiSpeakingTransport = { async generate(_prompt, audioParts) { received.push(audioParts); return { text: JSON.stringify(VALID_PAYLOAD), inputTokens: 100, outputTokens: 200 }; } };
+    const grader = new GeminiSpeakingGrader({ transport, maxAttempts: 1 });
+    await grader.gradeSpeaking({ transcript: "A complete answer.", question: "Describe your hometown.", audioParts: [{ audio: Buffer.from("private-audio"), mimeType: "audio/webm" }] });
+    expect(received[0]?.[0].mimeType).toBe("audio/webm");
+  });
   it("parses a valid JSON answer and reports meta", async () => {
     const { transport } = scriptedTransport([{ text: JSON.stringify(VALID_PAYLOAD) }]);
     const grader = new GeminiSpeakingGrader({
@@ -305,5 +312,10 @@ describe("prompt", () => {
     expect(prompt).toContain("I would like to talk about the park near my house.");
     expect(prompt).toContain("Russian");
     expect(prompt).toContain(SPEAKING_GRADING_PROMPT_V1.length ? "fluencyCoherence" : "");
+  });
+  it("switches pronunciation instructions when audio is attached", () => {
+    const prompt = buildSpeakingGradingPrompt({ question: "Q", transcript: "Answer", audioProvided: true });
+    expect(prompt).toContain("Listen to the attached recordings");
+    expect(prompt).not.toContain("No audio is attached");
   });
 });

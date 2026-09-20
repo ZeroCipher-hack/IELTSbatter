@@ -69,7 +69,7 @@ export function speakingPipelineIsMock(): boolean {
   return getTranscriptionProvider().isMock || getSpeakingGrader().isMock;
 }
 
-export { GeminiSpeakingGrader, GeminiTranscriptionProvider } from "./gemini";
+export { GeminiSpeakingGrader, GeminiTranscriptionProvider, MAX_GRADING_AUDIO_BYTES } from "./gemini";
 export { MockSpeakingGrader, MockTranscriptionProvider } from "./mock";
 export {
   SPEAKING_CRITERIA,

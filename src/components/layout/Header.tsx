@@ -17,9 +17,10 @@ export async function Header() {
         <nav className="flex items-center gap-2 sm:gap-3">
           {session ? (
             <>
+              <Link href="/full-exam" className="rounded-lg bg-brand-600 px-3 py-1.5 text-sm font-semibold text-white hover:bg-brand-700">{t("fullExam")}</Link>
               <Link
                 href="/dashboard"
-                className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 md:block"
               >
                 {t("dashboard")}
               </Link>
@@ -34,7 +35,7 @@ export async function Header() {
                 <Link
                   key={href}
                   href={href}
-                  className="rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100"
+                  className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 lg:block"
                 >
                   {t(label)}
                 </Link>

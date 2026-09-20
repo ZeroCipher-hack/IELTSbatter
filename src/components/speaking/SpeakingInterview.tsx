@@ -13,6 +13,7 @@ interface SpeakingInterviewProps {
   test: PublicSpeakingTest;
   initialInterview: SpeakingInterviewSnapshot;
   locale: string;
+  fullExamSessionId?: string | null;
 }
 
 /**
@@ -24,7 +25,7 @@ interface SpeakingInterviewProps {
  * The recording is uploaded as a file; audio never lives in the database and
  * the evaluation happens server-side.
  */
-export function SpeakingInterview({ test, initialInterview, locale }: SpeakingInterviewProps) {
+export function SpeakingInterview({ test, initialInterview, locale, fullExamSessionId = null }: SpeakingInterviewProps) {
   const t = useTranslations("speaking");
   const router = useRouter();
 
@@ -211,7 +212,7 @@ export function SpeakingInterview({ test, initialInterview, locale }: SpeakingIn
         body: JSON.stringify({ locale }),
       });
       if (!evaluated.ok) throw new Error("evaluate_failed");
-      router.push(`/speaking/result/${submissionId}`);
+      router.push(fullExamSessionId ? `/full-exam/${fullExamSessionId}` : `/speaking/result/${submissionId}`);
     } catch {
       setErrorKey("errors.submitFailed");
       setPhase("evaluation_error");

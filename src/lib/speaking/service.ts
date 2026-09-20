@@ -18,6 +18,7 @@ import {
   getSpeakingGrader,
   getTranscriptionProvider,
   speakingPipelineIsMock,
+  MAX_GRADING_AUDIO_BYTES,
   type SpeakingGradingResult,
 } from "@/lib/ai/speaking";
 import { SpeakingGradingError } from "@/lib/ai/speaking/types";
@@ -31,6 +32,7 @@ import type {
   SpeakingTestSummary,
 } from "@/lib/speaking/types";
 import { decideBeginPart, partTimerSeconds, timerRemaining } from "@/lib/speaking/state-machine";
+import { FullExamStateError, requireFullExamModuleAccess } from "@/lib/full-exam/service";
 
 export type { PublicSpeakingTest, SpeakingPrompt, SpeakingTestSummary };
 
@@ -141,8 +143,10 @@ async function snapshotInterview(interview: {
 
 /** Create one interview, or recover the caller's existing non-terminal one. */
 export async function createOrResumeSpeakingInterview(params: {
-  userId: string; testId: string;
+  userId: string; testId: string; fullExamSessionId?: string | null;
 }): Promise<SpeakingInterviewSnapshot | null> {
+  const fullExamSessionId = params.fullExamSessionId ?? null;
+  if (fullExamSessionId) await requireFullExamModuleAccess(params.userId, fullExamSessionId, "SPEAKING");
   const test = await getPublicSpeakingTest(params.testId);
   const firstPrompt = test && promptForPart(test, 1);
   if (!test || !firstPrompt) return null;
@@ -151,6 +155,11 @@ export async function createOrResumeSpeakingInterview(params: {
     where: { userId: params.userId, testId: params.testId, state: { notIn: [...TERMINAL_INTERVIEW_STATES] } },
     orderBy: { createdAt: "desc" },
   });
+  if (interview) {
+    const owner = await prisma.submission.findUnique({ where: { id: interview.submissionId }, select: { fullExamSessionId: true } });
+    if (owner?.fullExamSessionId && owner.fullExamSessionId !== fullExamSessionId) throw new FullExamStateError("full_exam_module_conflict");
+    if (fullExamSessionId && !owner?.fullExamSessionId) await prisma.submission.update({ where: { id: interview.submissionId }, data: { fullExamSessionId } });
+  }
   if (!interview) {
     try {
       interview = await prisma.$transaction(async (tx) => {
@@ -163,6 +172,7 @@ export async function createOrResumeSpeakingInterview(params: {
             essay: "",
             wordCount: 0,
             status: "PENDING",
+            fullExamSessionId,
           },
         });
         return tx.speakingInterview.create({
@@ -183,6 +193,7 @@ export async function createOrResumeSpeakingInterview(params: {
       if (!interview) throw error;
     }
   }
+  if (!interview) return null;
   return recoverSpeakingInterview(params.userId, interview.id, test);
 }
 
@@ -246,11 +257,12 @@ export async function createSpeakingSubmission(params: {
   userId: string;
   testId: string;
   promptId?: string | null;
+  fullExamSessionId?: string | null;
 }): Promise<{ submissionId: string; prompt: SpeakingPrompt } | null> {
-  const { userId, testId, promptId } = params;
+  const { userId, testId, promptId, fullExamSessionId = null } = params;
   const test = await getPublicSpeakingTest(testId);
   if (!test || test.prompts.length === 0) return null;
-  const interview = await createOrResumeSpeakingInterview({ userId, testId });
+  const interview = await createOrResumeSpeakingInterview({ userId, testId, fullExamSessionId });
   if (!interview) return null;
   const prompt = test.prompts.find((p) => p.id === interview.currentPromptId);
   if (!prompt || (promptId && prompt.id !== promptId)) return null;
@@ -451,19 +463,13 @@ export async function evaluateSpeakingSubmission(params: {
     const transcriber = getTranscriptionProvider();
     const grader = getSpeakingGrader();
     isMock = transcriber.isMock || grader.isMock || speakingPipelineIsMock();
-    const transcripts: string[] = [];
-    for (const recording of submission.recordings) {
+    const files = await Promise.all(submission.recordings.map(async (recording) => {
       const file = await getPrivateStorage().get(recording.storageKey);
       if (!file) throw new Error("recording_missing");
-      const transcription = await transcriber.transcribe({
-        audio: file.data,
-        mimeType: recording.mimeType,
-        language: "en",
-      });
-      if (!transcription.empty && transcription.transcript.trim()) {
-        transcripts.push(`Part ${recording.speakingPart ?? transcripts.length + 1}: ${transcription.transcript.trim()}`);
-      }
-    }
+      return { recording, file };
+    }));
+    const transcriptions = await Promise.all(files.map(({ recording, file }) => transcriber.transcribe({ audio: file.data, mimeType: recording.mimeType, language: "en" })));
+    const transcripts = transcriptions.flatMap((item, index) => !item.empty && item.transcript.trim() ? [`Part ${files[index].recording.speakingPart ?? index + 1}: ${item.transcript.trim()}`] : []);
     transcript = transcripts.join("\n\n");
 
     if (transcript.trim().length === 0) {
@@ -478,14 +484,17 @@ export async function evaluateSpeakingSubmission(params: {
       };
     }
 
+    const totalAudioBytes = files.reduce((sum, item) => sum + item.file.data.length, 0);
+    const audioParts = !grader.isMock && totalAudioBytes <= MAX_GRADING_AUDIO_BYTES ? files.map(({ recording, file }) => ({ audio: file.data, mimeType: recording.mimeType })) : undefined;
     const grading: SpeakingGradingResult = await grader.gradeSpeaking({
       transcript,
       question: submission.question,
       part: null,
       feedbackLocale,
+      audioParts,
     });
 
-    await persistSpeakingResult({ submissionId, transcript, grading, transcriber, isMock });
+    await persistSpeakingResult({ submissionId, transcript, grading, transcriber, isMock, pronunciationSource: audioParts ? "AUDIO" : "TRANSCRIPT" });
     await prisma.speakingInterview.update({
       where: { id: submission.speakingInterview.id },
       data: { state: "COMPLETED", completedAt: new Date(), failureReason: null },
@@ -543,8 +552,9 @@ async function persistSpeakingResult(params: {
   grading: SpeakingGradingResult;
   transcriber: { name: string; model: string; isMock: boolean };
   isMock: boolean;
+  pronunciationSource: "AUDIO" | "TRANSCRIPT";
 }): Promise<void> {
-  const { submissionId, transcript, grading, transcriber, isMock } = params;
+  const { submissionId, transcript, grading, transcriber, isMock, pronunciationSource } = params;
   const { evaluation, overallBand, meta } = grading;
 
   const payload = {
@@ -555,6 +565,7 @@ async function persistSpeakingResult(params: {
     lexicalResource: evaluation.scores.lexicalResource.band,
     grammar: evaluation.scores.grammaticalRange.band,
     pronunciation: evaluation.scores.pronunciation.band,
+    pronunciationSource,
     overall: overallBand,
     summary: evaluation.summary,
     strengths: evaluation.strengths,

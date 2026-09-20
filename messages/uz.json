@@ -13,7 +13,8 @@
     "writing": "Writing",
     "reading": "Reading",
     "listening": "Listening",
-    "speaking": "Speaking"
+    "speaking": "Speaking",
+    "fullExam": "To'liq imtihon"
   },
   "nav": {
     "home": "Bosh sahifa",
@@ -65,6 +66,18 @@
     "ctaText": "Ro'yxatdan o'ting va birinchi esseyingizni bepul baholang.",
     "ctaButton": "Boshlash",
     "footerRights": "Barcha huquqlar himoyalangan."
+  },
+  "fullExam": {
+    "eyebrow": "IELTS Full Mock", "title": "To'liq IELTS mock imtihonini boshlang",
+    "description": "Listening, Reading, Writing va Speaking aynan bitta sessiyaga bog'lanadi. Overall faqat to'rtta modul tugagach IELTS qoidasi bo'yicha hisoblanadi.",
+    "start": "To'liq imtihonni boshlash", "starting": "Boshlanmoqda...", "startError": "Imtihonni boshlab bo'lmadi. Qaytadan urinib ko'ring.",
+    "history": "To'liq imtihonlar tarixi", "noHistory": "Hali to'liq imtihon topshirmagansiz.", "sessionTitle": "To'liq imtihon jarayoni", "resultTitle": "IELTS mock natijasi", "startedAt": "Boshlangan vaqt", "overall": "Overall Band",
+    "officialRounding": "To'rtta modul o'rtachasi IELTS qoidasi bo'yicha eng yaqin 0.5 bandga yaxlitlangan.", "continue": "Boshlash", "retry": "Qayta urinish", "viewResult": "Batafsil natija", "testUnavailable": "Bu modul uchun test topilmadi.",
+    "processingTitle": "AI natijalari tayyorlanmoqda", "processingText": "Sahifa avtomatik yangilanadi. Writing yoki Speaking tugashi odatda 2 daqiqagacha vaqt olishi mumkin.",
+    "focusTitle": "Ko'proq ishlash kerak bo'lgan yo'nalish", "focusText": "Eng past natija: {modules}. Keyingi mashg'ulotni shu ko'nikmadan boshlang.", "disclaimer": "Bu tayyorgarlik uchun mock natija; rasmiy IELTS sertifikati emas.", "back": "To'liq imtihonlar",
+    "modules": { "listening": "Listening", "reading": "Reading", "writing": "Writing", "speaking": "Speaking" },
+    "status": { "IN_PROGRESS": "Jarayonda", "PROCESSING": "Baholanmoqda", "COMPLETED": "Tayyor", "FAILED": "Yakunlanmadi" },
+    "componentStatus": { "NOT_STARTED": "Boshlanmagan", "IN_PROGRESS": "Jarayonda", "PROCESSING": "Baholanmoqda", "COMPLETED": "Tugallangan", "FAILED": "Xatolik — qayta urining" }
   },
   "auth": {
     "loginTitle": "Hisobingizga kiring",
@@ -175,6 +188,7 @@
     "modulesSubtitle": "Har bir modul: oxirgi ball, oldingi ball, o'sish, urinishlar soni — barchasi bazadagi haqiqiy natijalardan.",
     "overallBand": "Umumiy ball",
     "overallNote": "modul ballari o'rtachasi",
+    "fullExamOverallNote": "Oxirgi tugallangan Full Exam natijasi",
     "latest": "oxirgi",
     "previous": "Oldingi ball",
     "improvementShort": "O'sish",
@@ -360,6 +374,7 @@
       "improvements": "Tavsiyalar",
       "transcript": "Transkript",
       "pronunciationNotice": "Pronunciation balli hozircha faqat transkript asosidagi taxmin; audio talaffuzi bevosita tahlil qilinmaydi.",
+      "pronunciationAudioNotice": "Pronunciation balli audio yozuvdagi tushunarlilik, urg'u, ritm va tovushlar asosida baholandi.",
       "audioPrivate": "Yozuv faqat sizga ko'rinadi (egalik tekshiruvi serverda).",
       "retry": "Yana bir marta ishlash"
     }

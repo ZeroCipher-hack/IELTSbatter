@@ -283,6 +283,7 @@ describe("evaluation pipeline (mock providers)", () => {
     expect(stored!.status).toBe("COMPLETED");
     expect(stored!.speakingResult!.isMock).toBe(true);
     expect(stored!.speakingResult!.transcriptionProvider).toBe("mock");
+    expect(stored!.speakingResult!.pronunciationSource).toBe("TRANSCRIPT");
     expect(stored!.speakingResult!.aiProvider).toBe("mock");
     expect(stored!.speakingResult!.overall).toBe(result!.overall);
     // The transcript becomes the submission text so the dashboard is uniform.

@@ -36,6 +36,7 @@ const MAX_RETRY_DELAY_MS = 8_000;
 const MAX_RAW_CHARS = 100_000;
 /** Gemini accepts inline audio up to roughly 20 MB; stay well below it. */
 export const MAX_INLINE_AUDIO_BYTES = 15 * 1024 * 1024;
+export const MAX_GRADING_AUDIO_BYTES = 18 * 1024 * 1024;
 
 /* ------------------------------------------------------------------ *
  * Transcription
@@ -111,7 +112,7 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
  * ------------------------------------------------------------------ */
 
 export interface GeminiSpeakingTransport {
-  generate(prompt: string): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null }>;
+  generate(prompt: string, audioParts?: Array<{ audio: Buffer; mimeType: string }>): Promise<{ text: string; inputTokens: number | null; outputTokens: number | null }>;
 }
 
 export interface GeminiSpeakingGraderOptions {
@@ -152,6 +153,7 @@ export class GeminiSpeakingGrader implements SpeakingGrader {
       transcript: input.transcript,
       part: input.part ?? null,
       feedbackLocale: input.feedbackLocale,
+      audioProvided: Boolean(input.audioParts?.length),
     });
 
     const startedAt = Date.now();
@@ -162,7 +164,7 @@ export class GeminiSpeakingGrader implements SpeakingGrader {
     while (attempts < this.maxAttempts) {
       attempts += 1;
       try {
-        const call = await this.transport.generate(prompt);
+        const call = await this.transport.generate(prompt, input.audioParts);
         const raw = truncate(call.text ?? "", MAX_RAW_CHARS);
 
         let parsed: unknown;
@@ -332,12 +334,13 @@ class SdkGeminiSpeakingTransport implements GeminiSpeakingTransport {
     this.client = new GoogleGenerativeAI(env.geminiApiKey);
   }
 
-  async generate(prompt: string) {
+  async generate(prompt: string, audioParts: Array<{ audio: Buffer; mimeType: string }> = []) {
     const model = this.client.getGenerativeModel({
       model: this.model,
       generationConfig: { temperature: 0.2, responseMimeType: "application/json" },
     });
-    const result = await model.generateContent(prompt, { timeout: this.timeoutMs });
+    const parts = [...audioParts.map((part) => ({ inlineData: { mimeType: part.mimeType, data: part.audio.toString("base64") } })), { text: prompt }];
+    const result = await model.generateContent({ contents: [{ role: "user", parts }] }, { timeout: this.timeoutMs });
     const usage = result.response.usageMetadata;
     return {
       text: result.response.text(),

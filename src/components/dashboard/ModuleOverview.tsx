@@ -47,7 +47,7 @@ export async function ModuleOverview({
           <p className="text-2xl font-extrabold text-brand-700" data-testid="overall-band">
             {overallBand != null ? overallBand.toFixed(1) : "—"}
           </p>
-          <p className="text-[10px] text-gray-400">{t("overallNote")}</p>
+          <p className="text-[10px] text-gray-400">{t("fullExamOverallNote")}</p>
         </div>
       </div>
 

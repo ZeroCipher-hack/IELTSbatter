@@ -12,6 +12,7 @@ import {
   IdempotencyConflictError,
   writingRequestFingerprint,
 } from "@/lib/writing/idempotency";
+import { requireFullExamModuleAccess } from "@/lib/full-exam/service";
 
 /**
  * Full writing grading pipeline:
@@ -38,9 +39,11 @@ export async function submitAndGradeEssay(params: {
   input: WritingSubmissionInput;
   feedbackLocale: string;
   idempotencyKey?: string | null;
+  fullExamSessionId?: string | null;
 }): Promise<GradingOutcome> {
-  const { userId, input, feedbackLocale, idempotencyKey = null } = params;
+  const { userId, input, feedbackLocale, idempotencyKey = null, fullExamSessionId = null } = params;
   const wordCount = countWords(input.essay);
+  if (fullExamSessionId) await requireFullExamModuleAccess(userId, fullExamSessionId, "WRITING");
 
   await failStaleWritingSubmissions(userId);
 
@@ -60,21 +63,34 @@ export async function submitAndGradeEssay(params: {
         status: "PENDING",
         idempotencyKey,
         requestFingerprint,
+        fullExamSessionId,
       },
     });
   } catch (error) {
-    if (!(idempotencyKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) {
+    if (!(error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002")) throw error;
+    if (idempotencyKey) {
+      const existing = await prisma.submission.findUnique({ where: { userId_idempotencyKey: { userId, idempotencyKey } } });
+      if (existing) {
+        if (existing.requestFingerprint !== requestFingerprint || existing.fullExamSessionId !== fullExamSessionId) throw new IdempotencyConflictError();
+        if (existing.status === "COMPLETED" || existing.status === "PROCESSING") return { submissionId: existing.id, status: existing.status };
+        submission = existing;
+      }
+    }
+    if (submission) {
+      // Same idempotent request reclaimed its existing PENDING/FAILED row.
+    } else if (fullExamSessionId) {
+      const existingExamSubmission = await prisma.submission.findFirst({
+        where: { userId, fullExamSessionId, module: "WRITING", status: { in: ["PENDING", "PROCESSING", "COMPLETED"] } },
+        orderBy: { createdAt: "desc" },
+      });
+      if (existingExamSubmission) return {
+        submissionId: existingExamSubmission.id,
+        status: existingExamSubmission.status === "COMPLETED" ? "COMPLETED" : "PROCESSING",
+      };
+      throw error;
+    } else {
       throw error;
     }
-    const existing = await prisma.submission.findUnique({
-      where: { userId_idempotencyKey: { userId, idempotencyKey } },
-    });
-    if (!existing) throw error;
-    if (existing.requestFingerprint !== requestFingerprint) throw new IdempotencyConflictError();
-    if (existing.status === "COMPLETED" || existing.status === "PROCESSING") {
-      return { submissionId: existing.id, status: existing.status };
-    }
-    submission = existing;
   }
 
   // Exactly one parallel request is allowed to call the provider. Failed

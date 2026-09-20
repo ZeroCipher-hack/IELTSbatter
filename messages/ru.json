@@ -13,7 +13,8 @@
     "writing": "Writing",
     "reading": "Reading",
     "listening": "Listening",
-    "speaking": "Speaking"
+    "speaking": "Speaking",
+    "fullExam": "Полный экзамен"
   },
   "nav": {
     "home": "Главная",
@@ -65,6 +66,18 @@
     "ctaText": "Зарегистрируйтесь и получите оценку первого эссе бесплатно.",
     "ctaButton": "Начать",
     "footerRights": "Все права защищены."
+  },
+  "fullExam": {
+    "eyebrow": "IELTS Full Mock", "title": "Начните полный пробный экзамен IELTS",
+    "description": "Listening, Reading, Writing и Speaking связываются с одной экзаменационной сессией. Overall рассчитывается по правилам IELTS только после завершения всех четырёх модулей.",
+    "start": "Начать полный экзамен", "starting": "Запуск...", "startError": "Не удалось начать экзамен. Попробуйте снова.",
+    "history": "История полных экзаменов", "noHistory": "Вы ещё не проходили полный экзамен.", "sessionTitle": "Ход полного экзамена", "resultTitle": "Результат IELTS mock", "startedAt": "Время начала", "overall": "Overall Band",
+    "officialRounding": "Среднее четырёх модулей округлено до ближайшего 0,5 по правилам IELTS.", "continue": "Начать", "retry": "Повторить", "viewResult": "Подробный результат", "testUnavailable": "Для этого модуля тест не найден.",
+    "processingTitle": "Результаты ИИ готовятся", "processingText": "Страница обновляется автоматически. Обработка Writing или Speaking обычно занимает до двух минут.",
+    "focusTitle": "Навык, требующий больше работы", "focusText": "Самый низкий результат: {modules}. Начните следующую тренировку с этого навыка.", "disclaimer": "Это пробный результат для подготовки, а не официальный сертификат IELTS.", "back": "Полные экзамены",
+    "modules": { "listening": "Listening", "reading": "Reading", "writing": "Writing", "speaking": "Speaking" },
+    "status": { "IN_PROGRESS": "В процессе", "PROCESSING": "Оценивается", "COMPLETED": "Готово", "FAILED": "Не завершён" },
+    "componentStatus": { "NOT_STARTED": "Не начат", "IN_PROGRESS": "В процессе", "PROCESSING": "Оценивается", "COMPLETED": "Завершён", "FAILED": "Ошибка — повторите" }
   },
   "auth": {
     "loginTitle": "Войдите в аккаунт",
@@ -175,6 +188,7 @@
     "modulesSubtitle": "Каждый модуль: последний балл, предыдущий балл, прогресс, число попыток — только реальные данные из базы.",
     "overallBand": "Общий балл",
     "overallNote": "среднее по модулям",
+    "fullExamOverallNote": "Последний завершённый Full Exam",
     "latest": "последний",
     "previous": "Предыдущий балл",
     "improvementShort": "Прогресс",
@@ -360,6 +374,7 @@
       "improvements": "Рекомендации",
       "transcript": "Транскрипт",
       "pronunciationNotice": "Баллы Pronunciation пока являются оценкой только по транскрипту; произношение в аудио напрямую не анализируется.",
+      "pronunciationAudioNotice": "Pronunciation оценён непосредственно по разборчивости, ударению, ритму и звукам в аудиозаписи.",
       "audioPrivate": "Запись видите только вы (проверка владельца на сервере).",
       "retry": "Пройти ещё раз"
     }

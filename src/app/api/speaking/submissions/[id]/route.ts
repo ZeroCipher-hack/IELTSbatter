@@ -42,6 +42,7 @@ export async function GET(_request: Request, props: { params: Promise<{ id: stri
                 lexicalResource: result.lexicalResource,
                 grammaticalRange: result.grammar,
                 pronunciation: result.pronunciation,
+                pronunciationSource: result.pronunciationSource,
                 overall: result.overall,
               },
               summary: result.summary,

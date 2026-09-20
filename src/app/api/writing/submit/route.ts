@@ -11,6 +11,7 @@ import {
   InvalidIdempotencyKeyError,
   parseIdempotencyKey,
 } from "@/lib/writing/idempotency";
+import { FullExamStateError } from "@/lib/full-exam/service";
 
 export const maxDuration = 120; // AI grading can take a while
 
@@ -35,12 +36,14 @@ export async function POST(request: Request) {
 
     const locale = request.headers.get("x-axi-locale") === "ru" ? "ru" : "uz";
     const idempotencyKey = parseIdempotencyKey(request.headers.get("idempotency-key"));
+    const fullExamSessionId = request.headers.get("x-full-exam-id")?.trim() || null;
 
     const result = await submitAndGradeEssay({
       userId: session.userId,
       input,
       feedbackLocale: locale,
       idempotencyKey,
+      fullExamSessionId,
     });
 
     if (result.status === "FAILED") {
@@ -65,6 +68,7 @@ export async function POST(request: Request) {
     if (error instanceof IdempotencyConflictError) {
       return apiError(409, error.message);
     }
+    if (error instanceof FullExamStateError) return apiError(409, error.code);
     return handleApiError(error);
   }
 }
