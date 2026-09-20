@@ -11,8 +11,8 @@ export async function Header() {
   return (
     <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/90 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
-        <Link href="/" className="text-xl font-bold tracking-tight text-brand-700">
-          AXI
+        <Link href="/" className="text-xl font-extrabold tracking-tight text-[#20211f]">
+          IELTS<span className="text-[#d63e2a]">QA</span>
         </Link>
         <nav className="flex items-center gap-2 sm:gap-3">
           {session ? (

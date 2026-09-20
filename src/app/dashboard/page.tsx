@@ -14,6 +14,7 @@ import { prisma } from "@/lib/db";
 import { getProgressStats, listOwnSubmissions } from "@/lib/writing/service";
 import { getModuleProgress } from "@/lib/testing/service";
 import { getSpeakingProgress } from "@/lib/speaking/service";
+import styles from "./dashboard.module.css";
 
 export default async function DashboardPage() {
   const session = await getSession();
@@ -107,12 +108,13 @@ export default async function DashboardPage() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className={styles.page}>
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-10">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <main className={`${styles.main} ${styles.content}`}>
+        <div className={styles.hero}>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">{t("title")}</h1>
+            <p className={styles.eyebrow}>IELTSQA / STUDENT WORKSPACE</p>
+            <h1>{t("title")}</h1>
             {user && (
               <p className="mt-1 text-sm text-gray-500">
                 {t("welcome")}, {user.name}!
@@ -131,7 +133,7 @@ export default async function DashboardPage() {
         <ModuleOverview items={overviewItems} overallBand={overallBand} />
 
         {/* Stat cards */}
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+        <div className={`${styles.stats} grid gap-4 sm:grid-cols-2 lg:grid-cols-6`}>
           <Card className="sm:col-span-1 lg:col-span-1">
             <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
               {t("essaysSubmitted")}

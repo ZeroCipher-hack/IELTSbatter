@@ -36,13 +36,13 @@ export async function ModuleOverview({
   const tTesting = await getTranslations("testing");
 
   return (
-    <Card className="mt-6" data-testid="module-overview">
+    <Card className="mt-6 border-[#292a27] bg-[#fffdf8] p-6 shadow-none" data-testid="module-overview">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">{t("modulesTitle")}</h2>
           <p className="mt-1 text-xs text-gray-500">{t("modulesSubtitle")}</p>
         </div>
-        <div className="rounded-lg bg-gray-50 px-4 py-2 text-right">
+        <div className="rounded-xl border border-[#292a27] bg-[#fff0c7] px-5 py-3 text-right">
           <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{t("overallBand")}</p>
           <p className="text-2xl font-extrabold text-brand-700" data-testid="overall-band">
             {overallBand != null ? overallBand.toFixed(1) : "—"}
@@ -52,7 +52,7 @@ export async function ModuleOverview({
       </div>
 
       <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {items.map((item) => {
+        {items.map((item, index) => {
           const improvement =
             item.latestBand != null && item.previousBand != null
               ? Math.round((item.latestBand - item.previousBand) * 10) / 10
@@ -61,12 +61,12 @@ export async function ModuleOverview({
           return (
             <div
               key={item.module}
-              className="flex flex-col justify-between rounded-xl border border-gray-200 p-4"
+              className={`flex min-h-[260px] flex-col justify-between rounded-xl border border-[#292a27] p-5 transition-transform hover:-translate-y-1 ${["bg-[#fce7d9]", "bg-[#fff0c7]", "bg-[#f9ddd9]", "bg-[#e8eed8]"][index]}`}
               data-testid={`module-card-${item.module}`}
             >
               <div>
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-gray-900">
+                  <p className="text-lg font-extrabold text-gray-900">
                     {tTesting(`modules.${item.module.toLowerCase()}`)}
                   </p>
                   {item.isMock && (
@@ -76,7 +76,7 @@ export async function ModuleOverview({
                   )}
                 </div>
 
-                <p className="mt-3 text-3xl font-extrabold text-gray-900">
+                <p className="mt-5 text-4xl font-extrabold text-[#b63321]">
                   {item.latestBand != null ? item.latestBand.toFixed(1) : "—"}
                   <span className="ml-2 align-middle text-xs font-medium text-gray-500">{t("latest")}</span>
                 </p>
