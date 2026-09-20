@@ -1,6 +1,6 @@
-import Image from "next/image";
 import Link from "next/link";
 import { getTranslations } from "next-intl/server";
+import { LandingExaminerPreview } from "@/components/landing/LandingExaminerPreview";
 import styles from "./landing.module.css";
 
 const skills = [
@@ -74,11 +74,11 @@ export default async function LandingPage() {
         <section className={styles.speaking}>
           <div className={styles.conversation}>
             <div className={styles.previewHeader}><span>{t("speakingPreview")}</span><span>PART 1</span></div>
-            <div className={styles.avatar}>
-              <Image src="/images/examiner-landing-v3.webp" alt="Nova — IELTSQA speaking examiner" fill sizes="(max-width: 760px) 90vw, 44vw" />
-            </div>
-            <div className={styles.waveRow}><span>●</span><div>{Array.from({ length: 24 }, (_, i) => <i key={i} style={{ height: `${9 + ((i * 13) % 30)}px` }} />)}</div><span>Ⅱ</span></div>
-            <p className={styles.transcript}><b>NOVA</b>What do you enjoy about where you live?</p>
+            <LandingExaminerPreview
+              question="What do you enjoy about where you live?"
+              repeatLabel={t("repeatQuestion")}
+              loadingLabel={t("examinerLoading")}
+            />
             <p className={styles.note}>{t("speakingPreviewNote")}</p>
           </div>
           <div><p className={styles.eyebrow}>SPEAKING</p><h2>{t("speakingTitle")}</h2><p className={styles.intro}>{t("speakingText")}</p><Link className={styles.textLink} href="/speaking">{t("speakingCta")} →</Link></div>

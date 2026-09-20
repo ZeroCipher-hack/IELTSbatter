@@ -9,6 +9,7 @@ export interface SpeakingAvatar3DHandle {
 
 interface Props {
   enabled: boolean;
+  onReadyChange?: (ready: boolean) => void;
   onSpeakingChange?: (speaking: boolean) => void;
 }
 
@@ -35,7 +36,7 @@ async function loadBrowserModule<T>(url: string): Promise<T> {
 }
 
 export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(function SpeakingAvatar3D(
-  { enabled, onSpeakingChange },
+  { enabled, onReadyChange, onSpeakingChange },
   ref
 ) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -48,6 +49,7 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
   const [progress, setProgress] = useState(0);
 
   useEffect(() => {
+    onReadyChange?.(false);
     if (!enabled || !containerRef.current) {
       setStatus("disabled");
       return;
@@ -95,6 +97,7 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
         if (cancelledRef.current) return;
         headRef.current = head;
         setStatus("ready");
+        onReadyChange?.(true);
       } catch {
         if (!cancelledRef.current) setStatus("fallback");
       }
@@ -114,8 +117,9 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
       try { head?.stopSpeaking(); head?.stop(); } catch { /* already disposed */ }
       headRef.current = null;
       ttsRef.current = null;
+      onReadyChange?.(false);
     };
-  }, [enabled]);
+  }, [enabled, onReadyChange]);
 
   async function ensureTts(): Promise<TTS> {
     if (!ttsRef.current) {
@@ -203,7 +207,7 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
           {status === "fallback" && <p className="mt-1 text-xs text-gray-500">3D unavailable — voice mode remains active.</p>}
         </div>
       )}
-      <div className="absolute bottom-3 left-3 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm">AXI Examiner · English (UK)</div>
+      <div className="absolute bottom-3 left-3 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm">IELTSQA Examiner · English (UK)</div>
     </div>
   );
 });

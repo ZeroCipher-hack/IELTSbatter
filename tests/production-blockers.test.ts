@@ -130,4 +130,13 @@ describe("speaking 3D examiner assets", () => {
     expect(source).toContain("@huggingface/transformers@4.0.0");
     expect(fs.existsSync("public/vendor/headtts/worker-tts.mjs")).toBe(true);
   });
+
+  it("uses the animated examiner on the landing page instead of a static photo", () => {
+    const landing = fs.readFileSync("src/app/page.tsx", "utf8");
+    const preview = fs.readFileSync("src/components/landing/LandingExaminerPreview.tsx", "utf8");
+    expect(landing).toContain("LandingExaminerPreview");
+    expect(landing).not.toContain("examiner-landing-v3.webp");
+    expect(preview).toContain("SpeakingAvatar3D");
+    expect(preview).toContain("avatarRef.current?.speak(question)");
+  });
 });
