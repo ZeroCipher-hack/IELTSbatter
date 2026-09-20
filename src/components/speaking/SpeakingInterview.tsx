@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { SpeakingAvatar3D, type SpeakingAvatar3DHandle } from "@/components/speaking/SpeakingAvatar3D";
+import { useLiveAnswerTranscript } from "@/hooks/useLiveAnswerTranscript";
+import { buildAdaptiveFollowUp } from "@/lib/speaking/adaptive-follow-up";
+import { buildRepeatSpeech, classifyExaminerIntent } from "@/lib/speaking/examiner-intents";
 import type { PublicSpeakingTest, SpeakingInterviewSnapshot, SpeakingPrompt } from "@/lib/speaking/types";
 
 type Phase = "idle" | "preparing" | "recording" | "recorded" | "uploading" | "evaluating" | "evaluation_error" | "error";
@@ -61,22 +65,66 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
   const [recordingUrl, setRecordingUrl] = useState<string | null>(null);
   const [recordingSize, setRecordingSize] = useState(0);
   const [errorKey, setErrorKey] = useState<string | null>(null);
+  const [voiceEnabled, setVoiceEnabled] = useState(true);
+  const [examinerSpeaking, setExaminerSpeaking] = useState(false);
+  const [adaptiveQuestion, setAdaptiveQuestion] = useState<string | null>(null);
 
+  const avatarRef = useRef<SpeakingAvatar3DHandle | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const blobRef = useRef<Blob | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const stopTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordingStartedAtRef = useRef<number | null>(null);
+  const followUpAskedRef = useRef(false);
+  const handledRepeatCommandRef = useRef(false);
+  const liveTranscript = useLiveAnswerTranscript();
 
-  const stopRecording = useCallback(() => {
+  const finalizeRecording = useCallback(() => {
     if (stopTimerRef.current) {
       clearTimeout(stopTimerRef.current);
       stopTimerRef.current = null;
     }
     const recorder = recorderRef.current;
     if (recorder && recorder.state !== "inactive") recorder.stop();
-  }, []);
+    liveTranscript.finish();
+  }, [liveTranscript]);
+
+  const speakQuestion = useCallback(async (repeat = false) => {
+    if (!voiceEnabled || !activePrompt) return false;
+    const question = adaptiveQuestion ?? activePrompt.prompt;
+    return avatarRef.current?.speak(repeat ? buildRepeatSpeech(question) : question) ?? false;
+  }, [activePrompt, adaptiveQuestion, voiceEnabled]);
+
+  const repeatDuringRecording = useCallback(async () => {
+    const recorder = recorderRef.current;
+    const canResume = recorder?.state === "recording";
+    if (canResume) recorder.pause();
+    liveTranscript.pause();
+    await speakQuestion(true);
+    if (canResume) {
+      try { recorder?.resume(); } catch { /* recording ended while the examiner spoke */ }
+    }
+    if (canResume) liveTranscript.resume();
+  }, [liveTranscript, speakQuestion]);
+
+  const stopOrFollowUp = useCallback(async () => {
+    const recorder = recorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+    const answer = liveTranscript.transcript;
+    const followUp = followUpAskedRef.current ? null : buildAdaptiveFollowUp(interview.currentPart, answer);
+    if (followUp) {
+      followUpAskedRef.current = true;
+      recorder.pause();
+      liveTranscript.pause();
+      setAdaptiveQuestion(followUp);
+      await avatarRef.current?.speak(`Thank you. ${followUp}`);
+      if (recorder.state === "paused") recorder.resume();
+      liveTranscript.resume();
+      return;
+    }
+    finalizeRecording();
+  }, [finalizeRecording, interview.currentPart, liveTranscript]);
 
   /* --------------------------------------------------------------- timers */
 
@@ -99,14 +147,22 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
     const timer = setTimeout(() => {
       setSpeakLeft((value) => {
         if (value <= 1) {
-          stopRecording();
+          finalizeRecording();
           return 0;
         }
         return value - 1;
       });
     }, 1000);
     return () => clearTimeout(timer);
-  }, [phase, speakLeft, stopRecording]);
+  }, [phase, speakLeft, finalizeRecording]);
+
+  useEffect(() => {
+    if (phase !== "recording" || !liveTranscript.transcript) return;
+    const intent = classifyExaminerIntent(liveTranscript.transcript);
+    if (intent !== "REPEAT_QUESTION" || handledRepeatCommandRef.current) return;
+    handledRepeatCommandRef.current = true;
+    void repeatDuringRecording();
+  }, [liveTranscript.transcript, phase, repeatDuringRecording]);
 
   useEffect(() => {
     return () => {
@@ -122,6 +178,11 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
   const startRecording = useCallback(async () => {
     if (!activePrompt) return;
     setErrorKey(null);
+    setAdaptiveQuestion(null);
+    followUpAskedRef.current = false;
+    handledRepeatCommandRef.current = false;
+
+    if (voiceEnabled) await speakQuestion(false);
 
     try {
       const response = await fetch(`/api/speaking/interviews/${interview.id}/transition`, {
@@ -176,6 +237,7 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
       if (event.data && event.data.size > 0) chunksRef.current.push(event.data);
     };
     recorder.onstop = () => {
+      liveTranscript.finish();
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
       blobRef.current = blob;
       setRecordingSize(blob.size);
@@ -190,16 +252,17 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
 
     recorderRef.current = recorder;
     recorder.start();
+    liveTranscript.begin();
     recordingStartedAtRef.current = Date.now();
     setPhase("recording");
 
     // Hard stop at the prompt's speaking limit, with a small grace period.
     const allowedSeconds = Math.max(1, interview.state.startsWith("PART_") ? speakLeft : partSpeakingSeconds);
     stopTimerRef.current = setTimeout(
-      () => stopRecording(),
+      () => finalizeRecording(),
       (allowedSeconds + 2) * 1000
     );
-  }, [activePrompt, interview.id, interview.state, partSpeakingSeconds, speakLeft, stopRecording]);
+  }, [activePrompt, finalizeRecording, interview.id, interview.state, liveTranscript, partSpeakingSeconds, speakLeft, speakQuestion, voiceEnabled]);
 
   /* -------------------------------------------------------------- submit */
 
@@ -285,6 +348,18 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
   return (
     <div className="grid gap-6 lg:grid-cols-[1fr_280px]">
       <div className="space-y-4">
+        <Card className="p-3 sm:p-4">
+          <SpeakingAvatar3D ref={avatarRef} enabled={voiceEnabled} onSpeakingChange={setExaminerSpeaking} />
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <Button variant="secondary" onClick={() => void (phase === "recording" ? repeatDuringRecording() : speakQuestion(true))} disabled={examinerSpeaking}>
+              {t("repeatQuestion")}
+            </Button>
+            <Button variant="secondary" onClick={() => { avatarRef.current?.stop(); setVoiceEnabled((value) => !value); }}>
+              {voiceEnabled ? t("voiceOff") : t("voiceOn")}
+            </Button>
+            {examinerSpeaking && <span className="text-sm font-medium text-brand-700">{t("examinerSpeaking")}</span>}
+          </div>
+        </Card>
         <Card>
           <div className="flex items-center justify-between">
             <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold uppercase tracking-wide text-brand-700">
@@ -341,13 +416,13 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
 
           <div className="mt-5 flex flex-wrap gap-3">
             {(phase === "idle" || phase === "error") && (
-              <Button onClick={() => void startRecording()} data-testid="start-recording">
+              <Button onClick={() => void startRecording()} disabled={examinerSpeaking} data-testid="start-recording">
                 {t("startRecording")}
               </Button>
             )}
 
             {phase === "recording" && (
-              <Button variant="danger" onClick={stopRecording} data-testid="stop-recording">
+              <Button variant="danger" onClick={() => void stopOrFollowUp()} data-testid="stop-recording">
                 {t("stopRecording")}
               </Button>
             )}
@@ -384,6 +459,21 @@ export function SpeakingInterview({ test, initialInterview, locale, fullExamSess
               <p className="mt-1 text-xs text-gray-500">
                 {t("recordingSize", { kb: Math.max(1, Math.round(recordingSize / 1024)) })}
               </p>
+            </div>
+          )}
+
+          {adaptiveQuestion && phase === "recording" && (
+            <div className="mt-4 rounded-xl border border-brand-200 bg-brand-50 px-4 py-3" data-testid="adaptive-follow-up">
+              <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">{t("followUp")}</p>
+              <p className="mt-1 text-sm font-medium text-gray-900">{adaptiveQuestion}</p>
+            </div>
+          )}
+
+          {liveTranscript.supported && phase === "recording" && liveTranscript.transcript && (
+            <div className="mt-4 rounded-xl bg-gray-50 px-4 py-3" data-testid="live-transcript">
+              <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">{t("liveTranscript")}</p>
+              <p className="mt-1 text-sm text-gray-700">{liveTranscript.transcript}</p>
+              <p className="mt-2 text-xs text-gray-500">{t("liveTranscriptPrivacy")}</p>
             </div>
           )}
 

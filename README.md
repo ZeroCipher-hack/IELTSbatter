@@ -182,6 +182,11 @@ npm run db:dev                 # starts embedded PostgreSQL on :5432 (keep runni
 npm run db:migrate             # in another terminal
 ```
 
+Run the bundled database as a normal OS user. In a root container it can use
+an existing `postgres` system account, but it deliberately does not create
+system users. Root-only sandboxes without that account must use an external
+PostgreSQL service.
+
 Offline/firewalled environments (Prisma CDN blocked):
 
 ```bash

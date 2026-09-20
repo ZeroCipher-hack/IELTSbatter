@@ -84,6 +84,8 @@ describe("CSP preparation", () => {
     const policy = buildContentSecurityPolicy(first, false);
     expect(policy).toContain(`script-src 'nonce-${first}' 'strict-dynamic'`);
     expect(policy).toContain("report-uri /api/security/csp-report");
+    expect(policy).toContain("worker-src 'self' blob:");
+    expect(policy).toContain("https://huggingface.co");
     expect(policy).not.toContain("'unsafe-eval'");
   });
   it("emits report-only instead of enforcing the policy", async () => {
@@ -109,5 +111,23 @@ describe("authenticated E2E contract", () => {
     expect(source).toContain('setPhase("evaluation_error")');
     expect(source).toContain("evaluateSubmission(interview.submissionId)");
     expect(source).toContain('t("retryEvaluation")');
+  });
+});
+
+describe("speaking 3D examiner assets", () => {
+  it("ships the CC0 avatar locally and never exposes a TTS secret", () => {
+    const source = fs.readFileSync("src/components/speaking/SpeakingAvatar3D.tsx", "utf8");
+    const attribution = fs.readFileSync("public/avatars/ATTRIBUTION.md", "utf8");
+    expect(fs.statSync("public/avatars/axi-examiner-mpfb.glb").size).toBeGreaterThan(1_000_000);
+    expect(source).toContain('url: "/avatars/axi-examiner-mpfb.glb"');
+    expect(source).not.toMatch(/apiKey|ttsApikey|GEMINI_API_KEY/);
+    expect(attribution).toContain("CC0 1.0 Universal");
+  });
+
+  it("keeps generated browser runtimes local and pins the public model runtime", () => {
+    const source = fs.readFileSync("src/components/speaking/SpeakingAvatar3D.tsx", "utf8");
+    expect(source).toContain("/vendor/talkinghead/talkinghead.bundle.mjs");
+    expect(source).toContain("@huggingface/transformers@4.0.0");
+    expect(fs.existsSync("public/vendor/headtts/worker-tts.mjs")).toBe(true);
   });
 });
