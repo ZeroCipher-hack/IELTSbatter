@@ -1,5 +1,6 @@
 {
   "common": {
+    "home": "Bosh sahifa",
     "appName": "AXI",
     "loading": "Yuklanmoqda...",
     "error": "Xatolik yuz berdi. Qaytadan urinib ko'ring.",

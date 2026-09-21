@@ -17,7 +17,8 @@ export function buildContentSecurityPolicy(nonce: string, development = false): 
     "img-src 'self' blob: data:",
     "font-src 'self' data:",
     "media-src 'self' blob:",
-    "connect-src 'self' https://huggingface.co https://*.huggingface.co https://cdn.jsdelivr.net",
+    // Three.js fetches embedded GLB textures through local object URLs.
+    "connect-src 'self' blob: https://huggingface.co https://*.huggingface.co https://cdn.jsdelivr.net",
     "worker-src 'self' blob:",
     "object-src 'none'",
     "base-uri 'self'",
