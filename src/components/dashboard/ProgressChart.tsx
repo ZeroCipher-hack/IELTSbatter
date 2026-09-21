@@ -38,9 +38,9 @@ export function ProgressChart({ data }: { data: ProgressPoint[] }) {
           <Line
             type="monotone"
             dataKey="overall"
-            stroke="#2544eb"
-            strokeWidth={2}
-            dot={{ r: 4, fill: "#2544eb" }}
+            stroke="#e85b16"
+            strokeWidth={3}
+            dot={{ r: 5, fill: "#d5fa49", stroke: "#17191d", strokeWidth: 2 }}
           />
         </LineChart>
       </ResponsiveContainer>

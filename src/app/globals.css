@@ -3,7 +3,7 @@
 @tailwind utilities;
 
 :root {
-  --background: #fafafa;
+  --background: #f4f5f8;
   --foreground: #111827;
 }
 
@@ -16,4 +16,28 @@ body {
   .text-balance {
     text-wrap: balance;
   }
+}
+
+body:has(.workspace-rail) { padding-left:100px; }
+.workspace-rail { position:fixed; z-index:60; top:12px; bottom:12px; left:12px; width:76px; border-radius:30px; background:#111315; color:#fff; display:flex; flex-direction:column; align-items:center; padding:18px 10px; }
+.rail-logo { display:grid; place-items:center; width:44px; height:44px; font-size:28px; border-radius:50%; background:#030404; color:#d5fa49; }
+.workspace-rail nav { display:flex; flex:1; flex-direction:column; justify-content:center; gap:14px; }
+.workspace-rail nav a { position:relative; display:grid; place-items:center; width:48px; height:48px; border-radius:17px; color:#aeb2b8; }
+.workspace-rail nav a:hover { background:#292d31; color:white; }
+.workspace-rail nav a[aria-current="page"] { background:#d5fa49; color:#111315; }
+.workspace-rail svg { width:23px; height:23px; }
+.rail-tooltip { position:absolute; left:60px; padding:8px 12px; background:#111315; color:white; border-radius:10px; font-size:12px; white-space:nowrap; opacity:0; pointer-events:none; }
+.workspace-rail a:hover .rail-tooltip,.workspace-rail a:focus-visible .rail-tooltip { opacity:1; }
+.rail-footer { font-size:9px; letter-spacing:2px; color:#aeb2b8; }
+.workspace-header { border-bottom:1px solid #e9ebef; }
+.ui-card { box-shadow:0 6px 24px rgba(24,29,35,.025); }
+a:focus-visible,button:focus-visible { outline:3px solid #b04b16; outline-offset:4px; }
+@media(max-width:700px) {
+ body:has(.workspace-rail) { padding-left:0; padding-bottom:calc(86px + env(safe-area-inset-bottom)); }
+ .workspace-rail { top:auto; bottom:calc(10px + env(safe-area-inset-bottom)); left:10px; right:10px; width:auto; height:64px; border-radius:22px; padding:8px; }
+ .workspace-rail nav { width:100%; flex-direction:row; justify-content:space-around; gap:2px; }
+ .workspace-rail nav a { width:44px; height:44px; }
+ .rail-logo,.rail-footer { display:none; }
+ .rail-tooltip { left:50%; bottom:56px; transform:translateX(-50%); }
+ .workspace-header>div { height:auto; min-height:64px; flex-wrap:wrap; gap:10px; padding-top:10px; padding-bottom:10px; }
 }

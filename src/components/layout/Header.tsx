@@ -3,16 +3,26 @@ import { getTranslations } from "next-intl/server";
 import { getSession } from "@/lib/auth/session";
 import { LanguageSwitcher } from "./LanguageSwitcher";
 import { LogoutButton } from "./LogoutButton";
+import { WorkspaceNav } from "./WorkspaceNav";
 
 export async function Header() {
   const t = await getTranslations("common");
   const session = await getSession();
 
   return (
-    <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/90 backdrop-blur">
+    <>
+    {session && <WorkspaceNav homeLabel={t("home")} items={[
+      {href: "/dashboard", label: t("dashboard")},
+      {href: "/full-exam", label: t("fullExam")},
+      {href: "/writing", label: t("writing")},
+      {href: "/reading", label: t("reading")},
+      {href: "/listening", label: t("listening")},
+      {href: "/speaking", label: t("speaking")},
+    ]} />}
+    <header className="workspace-header sticky top-0 z-40 bg-white/90 backdrop-blur">
       <div className="mx-auto flex h-14 max-w-6xl items-center justify-between px-4">
         <Link href="/" className="text-xl font-extrabold tracking-tight text-[#20211f]">
-          IELTS<span className="text-[#d63e2a]">QA</span>
+          IELTS<span className="text-[#d44d0c]">QA</span>
         </Link>
         <nav className="flex items-center gap-2 sm:gap-3">
           {session ? (
@@ -24,22 +34,6 @@ export async function Header() {
               >
                 {t("dashboard")}
               </Link>
-              {(
-                [
-                  ["writing", "/writing"],
-                  ["reading", "/reading"],
-                  ["listening", "/listening"],
-                  ["speaking", "/speaking"],
-                ] as const
-              ).map(([label, href]) => (
-                <Link
-                  key={href}
-                  href={href}
-                  className="hidden rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-100 lg:block"
-                >
-                  {t(label)}
-                </Link>
-              ))}
               <LanguageSwitcher />
               <LogoutButton label={t("logout")} />
             </>
@@ -63,5 +57,6 @@ export async function Header() {
         </nav>
       </div>
     </header>
+    </>
   );
 }

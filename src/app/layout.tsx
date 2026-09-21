@@ -4,9 +4,9 @@ import { getLocale, getMessages } from "next-intl/server";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "AXI — AI Writing Assessment",
+  title: "IELTSQA — IELTS Mock Exam",
   description:
-    "AXI — IELTS Writing esselaringizni sun'iy intellekt yordamida rasmiy mezonlar asosida baholang.",
+    "IELTS Reading, Listening, Writing va Speaking mashqlari, mock imtihonlar va natijalar tahlili.",
 };
 
 export default async function RootLayout({

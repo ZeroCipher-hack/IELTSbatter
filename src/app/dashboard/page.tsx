@@ -129,11 +129,19 @@ export default async function DashboardPage() {
           </Link>
         </div>
 
-        {/* All modules: latest / previous / progress / attempts, from the DB */}
+        <section className={styles.summary} aria-label={t("modulesTitle")}>
+          <div className={styles.metric}><span className={styles.metricIcon} aria-hidden="true">↗</span><strong>{overviewItems.reduce((sum, item) => sum + item.attempts, 0)}</strong><p>{t("attemptsShort")}</p></div>
+          <div className={styles.metric}><span className={styles.metricIcon} aria-hidden="true">◎</span><strong>{overallBand == null ? "—" : overallBand.toFixed(1)}</strong><p>{t("overallBand")}</p><small>{t("fullExamOverallNote")}</small></div>
+          <Link href="/full-exam" className={styles.examCta}><span>IELTS MOCK EXAM ↗</span><strong>{tc("fullExam")}</strong><small>Listening · Reading · Writing · Speaking</small></Link>
+        </section>
+
+        <div className={styles.modules}>
         <ModuleOverview items={overviewItems} overallBand={overallBand} />
+        </div>
 
         {/* Stat cards */}
-        <div className={`${styles.stats} grid gap-4 sm:grid-cols-2 lg:grid-cols-6`}>
+        <aside className={styles.stats} aria-label={tc("writing")}>
+          <h2>Writing · {t("averageOverall")}</h2>
           <Card className="sm:col-span-1 lg:col-span-1">
             <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
               {t("essaysSubmitted")}
@@ -156,20 +164,18 @@ export default async function DashboardPage() {
               </p>
             </Card>
           ))}
-        </div>
+        </aside>
 
         {/* Chart */}
-        {stats.history.length > 1 && (
-          <Card className="mt-6">
+          <Card className={styles.chart}>
             <h2 className="text-lg font-semibold text-gray-900">{t("progressChart")}</h2>
             <div className="mt-4">
-              <ProgressChart data={stats.history} />
+              {stats.history.length ? <ProgressChart data={stats.history} /> : <p className="flex min-h-60 items-center justify-center text-sm text-gray-500">{t("empty")}</p>}
             </div>
           </Card>
-        )}
 
         {/* History */}
-        <Card className="mt-6">
+        <Card className={styles.history}>
           <h2 className="text-lg font-semibold text-gray-900">{t("history")}</h2>
           {submissions.length === 0 ? (
             <div className="mt-6 rounded-lg border border-dashed border-gray-300 py-12 text-center">

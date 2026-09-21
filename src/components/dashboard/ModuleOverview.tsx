@@ -36,13 +36,13 @@ export async function ModuleOverview({
   const tTesting = await getTranslations("testing");
 
   return (
-    <Card className="mt-6 border-[#292a27] bg-[#fffdf8] p-6 shadow-none" data-testid="module-overview">
+    <Card className="p-6" data-testid="module-overview">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-gray-900">{t("modulesTitle")}</h2>
           <p className="mt-1 text-xs text-gray-500">{t("modulesSubtitle")}</p>
         </div>
-        <div className="rounded-xl border border-[#292a27] bg-[#fff0c7] px-5 py-3 text-right">
+        <div className="rounded-2xl border border-gray-100 bg-[#e6fba7] px-5 py-3 text-right">
           <p className="text-xs font-medium uppercase tracking-wide text-gray-500">{t("overallBand")}</p>
           <p className="text-2xl font-extrabold text-brand-700" data-testid="overall-band">
             {overallBand != null ? overallBand.toFixed(1) : "—"}
@@ -61,7 +61,7 @@ export async function ModuleOverview({
           return (
             <div
               key={item.module}
-              className={`flex min-h-[260px] flex-col justify-between rounded-xl border border-[#292a27] p-5 transition-transform hover:-translate-y-1 ${["bg-[#fce7d9]", "bg-[#fff0c7]", "bg-[#f9ddd9]", "bg-[#e8eed8]"][index]}`}
+              className={`flex min-h-[260px] flex-col justify-between rounded-2xl border border-gray-100 p-5 transition-transform hover:-translate-y-1 ${["bg-[#fff0e8]", "bg-[#e6fba7]", "bg-[#f2f4f7]", "bg-[#ffe5d6]"][index]}`}
               data-testid={`module-card-${item.module}`}
             >
               <div>
@@ -76,7 +76,7 @@ export async function ModuleOverview({
                   )}
                 </div>
 
-                <p className="mt-5 text-4xl font-extrabold text-[#b63321]">
+                <p className="mt-5 text-4xl font-extrabold text-gray-900">
                   {item.latestBand != null ? item.latestBand.toFixed(1) : "—"}
                   <span className="ml-2 align-middle text-xs font-medium text-gray-500">{t("latest")}</span>
                 </p>
