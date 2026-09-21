@@ -1,6 +1,7 @@
 "use client";
 
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import styles from "./SpeakingAvatar3D.module.css";
 
 export interface SpeakingAvatar3DHandle {
   speak(text: string): Promise<boolean>;
@@ -69,19 +70,24 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
           lipsyncModules: [],
           lipsyncLang: "en",
           cameraView: "upper",
+          cameraDistance: -0.4,
           cameraRotateEnable: false,
           cameraPanEnable: false,
           cameraZoomEnable: false,
           modelPixelRatio: Math.min(window.devicePixelRatio || 1, 1.5),
           modelFPS: 30,
-          lightAmbientIntensity: 3,
-          lightDirectIntensity: 24,
+          lightAmbientColor: 0xe8e4ff,
+          lightAmbientIntensity: 2.2,
+          lightDirectColor: 0xffeedf,
+          lightDirectIntensity: 16,
+          lightSpotColor: 0xc4b5fd,
+          lightSpotIntensity: 8,
         });
         await head.showAvatar(
           {
             url: "/avatars/axi-examiner-mpfb.glb",
             body: "F",
-            avatarMood: "happy",
+            avatarMood: "neutral",
             lipsyncLang: "en",
             baseline: {},
             modelDynamicBones: [
@@ -196,18 +202,23 @@ export const SpeakingAvatar3D = forwardRef<SpeakingAvatar3DHandle, Props>(functi
   }), [enabled, onSpeakingChange]);
 
   return (
-    <div className="relative min-h-[300px] overflow-hidden rounded-2xl bg-gradient-to-b from-slate-100 via-sky-50 to-brand-50" data-testid="speaking-avatar-3d">
+    <div className={styles.stage} data-testid="speaking-avatar-3d">
+      <div className={styles.backdrop} aria-hidden="true">
+        <div className={styles.arch} />
+        <div className={styles.light} />
+        <div className={styles.plant}><i /><i /><i /></div>
+      </div>
       {enabled && <div ref={containerRef} className="absolute inset-0" aria-label="3D IELTS examiner" />}
       {(status === "loading" || status === "fallback" || status === "disabled") && (
         <div className="absolute inset-0 flex flex-col items-center justify-center px-6 text-center">
           <div className="flex h-28 w-28 items-center justify-center rounded-full bg-brand-100 text-5xl" aria-hidden="true">👩‍🏫</div>
-          <p className="mt-4 text-sm font-semibold text-gray-800">
+          <p className="mt-4 text-sm font-semibold text-white">
             {status === "loading" ? `3D examiner loading${progress ? ` · ${progress}%` : "…"}` : "IELTS examiner"}
           </p>
-          {status === "fallback" && <p className="mt-1 text-xs text-gray-500">3D unavailable — voice mode remains active.</p>}
+          {status === "fallback" && <p className="mt-1 text-xs text-slate-200">3D unavailable — voice mode remains active.</p>}
         </div>
       )}
-      <div className="absolute bottom-3 left-3 rounded-full bg-white/90 px-3 py-1 text-xs font-semibold text-gray-700 shadow-sm">IELTSQA Examiner · English (UK)</div>
+      <div className={styles.badge}>IELTSQA Examiner · English</div>
     </div>
   );
 });
